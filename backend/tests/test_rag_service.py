@@ -73,6 +73,32 @@ class RagServiceTests(unittest.TestCase):
         self.assertEqual(documents[0].status, "failed")
         service.close()
 
+    def test_fast_fact_question_skips_query_embedding(self) -> None:
+        temp_dir = Path.cwd() / "backend" / ".test-tmp" / f"rag-{uuid.uuid4().hex}"
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        os.environ["RAG_DATA_DIR"] = str(temp_dir / "data")
+        os.environ["RAG_SQLITE_PATH"] = ":memory:"
+        os.environ["RAG_USE_OLLAMA"] = "0"
+        path = temp_dir / "resume.txt"
+        path.write_text(
+            "Amartya Vishwakarma BTECH(CSE), CGPA: 8.09 "
+            "2021 - 2025 Shri Ram Institute of Science & Technology Jabalpur, MP",
+            encoding="utf-8",
+        )
+
+        class BrokenEmbedder:
+            def embed(self, texts: list[str]) -> list[list[float]]:
+                raise AssertionError("fast fact queries should not call embeddings")
+
+        service = RagService(get_settings())
+        service.ingest(path, build_okf=False)
+        service.embedder = BrokenEmbedder()  # type: ignore[assignment]
+        answer = service.ask("whats amartya collage name?", include_debug=True)
+
+        self.assertTrue(answer.debug["fast_fact_query"])
+        self.assertIn("Shri Ram Institute of Science & Technology", answer.answer)
+        service.close()
+
 
 if __name__ == "__main__":
     unittest.main()

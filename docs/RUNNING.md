@@ -197,3 +197,5 @@ Also make sure the embedding model is already pulled locally:
 ```powershell
 ollama pull qwen3-embedding:4b
 ```
+
+The first question after starting Ollama can still be slow because Ollama may need to load the model into memory. Simple resume-style fact questions such as name, college, degree, CGPA, email, and phone now use a fast local text-search path and should not need LLM generation.

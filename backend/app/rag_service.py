@@ -120,10 +120,21 @@ class RagService:
         chunks = self.store.list_chunks()
         by_id = {chunk.chunk_id: chunk for chunk in chunks}
         query_type = classify_query(question)
-        query_embedding = self.embedder.embed([question])[0]
-        dense_results = self.vectors.search(query_embedding, self.settings.dense_top_k)
-        sparse_results = self.sparse.search(question, self.settings.sparse_top_k)
-        okf_concept_results, okf_source_results = self._retrieve_okf_sources(question, query_embedding)
+        fast_fact_query = self._is_fast_fact_query(question)
+        search_question = self._normalize_search_question(question)
+        dense_results: list[tuple[str, float]] = []
+        okf_concept_results: list[tuple[str, float]] = []
+        if fast_fact_query:
+            sparse_results = self.sparse.search(search_question, self.settings.sparse_top_k)
+            okf_source_results = self._retrieve_okf_sources_sparse(search_question)
+        else:
+            query_embedding = self.embedder.embed([search_question])[0]
+            dense_results = self.vectors.search(query_embedding, self.settings.dense_top_k)
+            sparse_results = self.sparse.search(search_question, self.settings.sparse_top_k)
+            okf_concept_results, okf_source_results = self._retrieve_okf_sources(
+                search_question,
+                query_embedding,
+            )
         fused = reciprocal_rank_fusion(
             [dense_results, sparse_results, okf_source_results],
             top_k=self.settings.fusion_top_k,
@@ -142,6 +153,7 @@ class RagService:
                 "okf_source_results": okf_source_results,
                 "fusion_results": fused,
                 "selected_chunk_ids": [chunk.chunk_id for chunk in selected],
+                "fast_fact_query": fast_fact_query,
             }
         return selected, debug
 
@@ -207,6 +219,28 @@ class RagService:
         okf_source_results = sorted(source_scores.items(), key=lambda item: item[1], reverse=True)
         return okf_concept_results, okf_source_results[: self.settings.sparse_top_k]
 
+    def _retrieve_okf_sources_sparse(self, question: str) -> list[tuple[str, float]]:
+        concepts = self.store.list_concepts()
+        if not concepts:
+            return []
+
+        concept_by_chunk_id = {f"okf:{concept.concept_id}": concept for concept in concepts}
+        okf_sparse = self.okf_sparse.search(question, 10)
+        source_scores: dict[str, float] = {}
+        for rank, (concept_chunk_id, score) in enumerate(okf_sparse, start=1):
+            concept = concept_by_chunk_id.get(concept_chunk_id)
+            if not concept:
+                continue
+            rank_score = score + 1.0 / rank
+            for source_chunk_id in concept.source_chunk_ids:
+                source_scores[source_chunk_id] = max(
+                    source_scores.get(source_chunk_id, 0.0),
+                    rank_score,
+                )
+        return sorted(source_scores.items(), key=lambda item: item[1], reverse=True)[
+            : self.settings.sparse_top_k
+        ]
+
     def _concept_chunks(self, concepts: list[OkfConcept]) -> list[Chunk]:
         return [
             Chunk(
@@ -245,3 +279,34 @@ class RagService:
         if query_type in {"direct_factual", "exact_identifier", "numeric_or_table", "follow_up_or_short"}:
             return min(self.settings.final_context_chunks, 4)
         return self.settings.final_context_chunks
+
+    def _is_fast_fact_query(self, question: str) -> bool:
+        normalized = question.lower()
+        fact_terms = {
+            "full name",
+            "person name",
+            "candidate name",
+            "user name",
+            "college",
+            "collage",
+            "university",
+            "institute",
+            "school",
+            "degree",
+            "course",
+            "branch",
+            "program",
+            "cgpa",
+            "gpa",
+            "email",
+            "mail",
+            "phone",
+            "mobile",
+            "contact",
+        }
+        return any(term in normalized for term in fact_terms)
+
+    def _normalize_search_question(self, question: str) -> str:
+        normalized = question.replace("collage", "college").replace("Collage", "College")
+        normalized = normalized.replace("whats", "what is").replace("Whats", "What is")
+        return normalized

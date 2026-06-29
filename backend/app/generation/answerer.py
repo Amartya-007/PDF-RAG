@@ -77,6 +77,10 @@ class Answerer:
                 r"\bC?GPA\b\s*(?:[:=\-]|is|of)?\s*([0-9]+(?:\.[0-9]+)?)",
                 "The CGPA is {value}.",
             )
+        if any(term in normalized for term in ["college", "collage", "university", "institute", "school"]):
+            return self._answer_institution(chunks, citations)
+        if any(term in normalized for term in ["degree", "course", "branch", "program"]):
+            return self._answer_degree(chunks, citations)
         if "email" in normalized or "mail" in normalized:
             return self._answer_pattern(
                 chunks,
@@ -125,6 +129,34 @@ class Answerer:
                 return f"The full name is {self._title_case_name(line_match.group(1))}. [{citation.source_id}]"
         return None
 
+    def _answer_institution(self, chunks: list[Chunk], citations: list[Citation]) -> str | None:
+        for citation, chunk in zip(citations, chunks):
+            for segment in self._candidate_segments(chunk.text):
+                institution = self._extract_institution(segment)
+                if institution:
+                    return f"The college name is {institution}. [{citation.source_id}]"
+        return None
+
+    def _answer_degree(self, chunks: list[Chunk], citations: list[Citation]) -> str | None:
+        degree_pattern = (
+            r"\b("
+            r"B\.?\s?Tech|BTECH|Bachelor of Technology|"
+            r"M\.?\s?Tech|MTECH|Master of Technology|"
+            r"B\.?\s?E\.?|BCA|MCA|BSc|MSc|MBA"
+            r")\b\s*(?:\(?\s*([A-Z][A-Z.&\s]{1,20})\s*\)?)?"
+        )
+        for citation, chunk in zip(citations, chunks):
+            match = re.search(degree_pattern, chunk.text, flags=re.IGNORECASE)
+            if not match:
+                continue
+            degree = match.group(1).replace(" ", "")
+            branch = (match.group(2) or "").strip(" .,:;-()")
+            value = self._normalize_degree(degree)
+            if branch:
+                value = f"{value} ({branch})"
+            return f"The degree is {value}. [{citation.source_id}]"
+        return None
+
     def _answer_pattern(
         self,
         chunks: list[Chunk],
@@ -161,3 +193,40 @@ class Answerer:
 
     def _title_case_name(self, value: str) -> str:
         return " ".join(part[:1].upper() + part[1:].lower() for part in value.split())
+
+    def _candidate_segments(self, text: str) -> list[str]:
+        segments = re.split(r"[\n|•]+", text)
+        return [segment.strip() for segment in segments if segment.strip()] + [text]
+
+    def _extract_institution(self, text: str) -> str | None:
+        pattern = (
+            r"\b([A-Z][A-Za-z.'-]*"
+            r"(?:\s+(?:[A-Z][A-Za-z.'-]*|of|and|&)){0,12}"
+            r"\s+(?:Institute|University|College|School)"
+            r"(?:\s+(?:[A-Z][A-Za-z.'-]*|of|and|&)){0,12})\b"
+        )
+        match = re.search(pattern, text)
+        if not match:
+            return None
+        value = match.group(1)
+        value = re.split(
+            r"\b(?:CGPA|GPA|BTECH|B\.Tech|MTECH|M\.Tech|Percentage|20\d{2}|19\d{2})\b",
+            value,
+        )[0]
+        return " ".join(value.strip(" .,:;-()").split())
+
+    def _normalize_degree(self, value: str) -> str:
+        normalized = value.lower().replace(".", "").replace(" ", "")
+        mapping = {
+            "btech": "B.Tech",
+            "bacheloroftechnology": "B.Tech",
+            "mtech": "M.Tech",
+            "masteroftechnology": "M.Tech",
+            "be": "B.E.",
+            "bca": "BCA",
+            "mca": "MCA",
+            "bsc": "BSc",
+            "msc": "MSc",
+            "mba": "MBA",
+        }
+        return mapping.get(normalized, value)
