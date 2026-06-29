@@ -307,13 +307,21 @@ class MainWindow(QMainWindow):
         QMessageBox.critical(self, "Local PDF RAG Error", self._friendly_error(message))
 
     def _friendly_error(self, message: str) -> str:
-        if "PDF parsing requires Docling or PyMuPDF" in message:
+        if "PDF parsing requires PyMuPDF" in message:
             return (
                 "PDF parsing is not available in this Python environment.\n\n"
                 "Fix:\n"
                 "  py -m pip install -e .[desktop]\n\n"
                 "The desktop extra now includes PyMuPDF for local PDF parsing. "
-                "Restart the app after installing."
+                "Restart the app after installing.\n\n"
+                f"{message}"
+            )
+        if "no searchable text was extracted" in message:
+            return (
+                "The PDF parser opened this file, but did not find searchable text.\n\n"
+                "If this PDF is scanned or image-only, install OCR support:\n"
+                "  py -m pip install -e .[pdf]\n\n"
+                "Then restart the app and click Repair Stuck Imports."
             )
         return message
 

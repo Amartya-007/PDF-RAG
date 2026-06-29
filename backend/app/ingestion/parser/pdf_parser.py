@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import importlib
 from pathlib import Path
+from types import ModuleType
 
 from backend.app.models import PageText
 
@@ -28,8 +30,9 @@ class PdfParser:
             return pymupdf_pages
 
         raise ParseError(
-            "PDF parsing requires Docling or PyMuPDF. Install optional dependencies with "
-            "`py -m pip install -e .[pdf]`."
+            "PDF parsing is installed, but no searchable text was extracted from this PDF. "
+            "If this is a scanned/image-only PDF, install Docling/OCR support with "
+            "`py -m pip install -e .[pdf]` or import a text-searchable PDF."
         )
 
     def _try_docling(self, path: Path) -> list[PageText]:
@@ -46,10 +49,7 @@ class PdfParser:
         return []
 
     def _try_pymupdf(self, path: Path) -> list[PageText]:
-        try:
-            import fitz  # type: ignore
-        except Exception:
-            return []
+        fitz = self._load_pymupdf()
 
         pages: list[PageText] = []
         with fitz.open(path) as doc:
@@ -58,3 +58,18 @@ class PdfParser:
                 if text.strip():
                     pages.append(PageText(page_number=index, text=text, section_path=(path.stem,)))
         return pages
+
+    def _load_pymupdf(self) -> ModuleType:
+        errors: list[str] = []
+        for module_name in ("pymupdf", "fitz"):
+            try:
+                return importlib.import_module(module_name)
+            except Exception as exc:
+                errors.append(f"{module_name}: {exc}")
+        raise ParseError(
+            "PDF parsing requires PyMuPDF, but it could not be imported.\n\n"
+            "Fix:\n"
+            "  py -m pip install -e .[desktop]\n\n"
+            "Details:\n"
+            + "\n".join(errors)
+        )

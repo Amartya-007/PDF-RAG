@@ -2,23 +2,32 @@
 # Build from the repository root after installing desktop dependencies:
 #   pyinstaller desktop/packaging/local_pdf_rag_desktop.spec
 
-from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs, collect_submodules
 from pathlib import Path
 
 
 block_cipher = None
 project_root = Path(SPECPATH).parents[1]
 
-hiddenimports = collect_submodules("backend") + collect_submodules("desktop")
+hiddenimports = (
+    collect_submodules("backend")
+    + collect_submodules("desktop")
+    + collect_submodules("fitz")
+    + collect_submodules("pymupdf")
+)
+
+pymupdf_datas = collect_data_files("pymupdf") + collect_data_files("fitz")
+pymupdf_binaries = collect_dynamic_libs("pymupdf") + collect_dynamic_libs("fitz")
 
 a = Analysis(
     [str(project_root / "desktop" / "app.py")],
     pathex=[str(project_root)],
-    binaries=[],
+    binaries=pymupdf_binaries,
     datas=[
         (str(project_root / "README.md"), "."),
         (str(project_root / "Model-to-use-instructions.md"), "."),
-    ],
+    ]
+    + pymupdf_datas,
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
