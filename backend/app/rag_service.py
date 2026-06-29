@@ -119,6 +119,7 @@ class RagService:
     def retrieve(self, question: str, include_debug: bool = False) -> tuple[list[Chunk], dict[str, object]]:
         chunks = self.store.list_chunks()
         by_id = {chunk.chunk_id: chunk for chunk in chunks}
+        query_type = classify_query(question)
         query_embedding = self.embedder.embed([question])[0]
         dense_results = self.vectors.search(query_embedding, self.settings.dense_top_k)
         sparse_results = self.sparse.search(question, self.settings.sparse_top_k)
@@ -129,11 +130,12 @@ class RagService:
         )
         candidates = [by_id[chunk_id] for chunk_id, _score in fused if chunk_id in by_id]
         reranked = self.reranker.rerank(question, candidates, self.settings.rerank_top_k)
-        selected = [chunk for chunk, _score in reranked[: self.settings.final_context_chunks]]
+        context_limit = self._context_limit_for_query(query_type)
+        selected = [chunk for chunk, _score in reranked[:context_limit]]
         debug = {}
         if include_debug:
             debug = {
-                "query_type": classify_query(question),
+                "query_type": query_type,
                 "dense_results": dense_results,
                 "sparse_results": sparse_results,
                 "okf_concept_results": okf_concept_results,
@@ -238,3 +240,8 @@ class RagService:
             ]
         )
         return f"{metadata_text}\n\n{concept.text}"
+
+    def _context_limit_for_query(self, query_type: str) -> int:
+        if query_type in {"direct_factual", "exact_identifier", "numeric_or_table", "follow_up_or_short"}:
+            return min(self.settings.final_context_chunks, 4)
+        return self.settings.final_context_chunks

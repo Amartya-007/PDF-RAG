@@ -203,6 +203,12 @@ class MetadataStore:
         path: str | None = None,
     ) -> None:
         with self.connect() as conn:
+            existing_slug = conn.execute(
+                "select concept_id from concepts where slug = ?",
+                (slug,),
+            ).fetchone()
+            if existing_slug and existing_slug["concept_id"] != concept_id:
+                slug = f"{slug}-{concept_id[-8:]}"
             conn.execute(
                 """
                 insert into concepts(

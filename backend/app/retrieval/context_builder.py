@@ -4,7 +4,7 @@ from backend.app.core.text import truncate_words
 from backend.app.models import Citation, Chunk
 
 
-def build_evidence_block(chunks: list[Chunk], max_words_per_source: int = 220) -> tuple[str, list[Citation]]:
+def build_evidence_block(chunks: list[Chunk], max_words_per_source: int = 90) -> tuple[str, list[Citation]]:
     lines: list[str] = []
     citations: list[Citation] = []
     for index, chunk in enumerate(chunks, start=1):

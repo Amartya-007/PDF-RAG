@@ -41,7 +41,11 @@ class OkfGenerator:
 
     def generate_for_document(self, chunks: list[Chunk], max_concepts: int = 12) -> list[Path]:
         terms = self._top_terms(chunks, max_concepts)
-        slugs = {term: slugify(term.replace("-", " ").title()) for term in terms}
+        document_slug = self._document_slug(chunks)
+        slugs = {
+            term: f"{document_slug}-{slugify(term.replace('-', ' ').title())}"
+            for term in terms
+        }
         paths: list[Path] = []
         for term in terms:
             related = [chunk for chunk in chunks if term in set(tokenize(chunk.text))][:5]
@@ -80,6 +84,13 @@ class OkfGenerator:
             paths.append(path)
         self._write_indexes(paths)
         return paths
+
+    def _document_slug(self, chunks: list[Chunk]) -> str:
+        if not chunks:
+            return "document"
+        filename_slug = slugify(Path(chunks[0].filename).stem)
+        document_suffix = slugify(chunks[0].document_id.replace("doc_", ""))[:8]
+        return f"{filename_slug}-{document_suffix}" if document_suffix else filename_slug
 
     def _top_terms(self, chunks: list[Chunk], max_concepts: int) -> list[str]:
         counts: dict[str, int] = {}
