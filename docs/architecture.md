@@ -7,6 +7,8 @@ The system keeps two searchable layers:
 
 Final answers must cite source chunks, not OKF files. OKF improves routing and broad concept retrieval, but the PDF-derived evidence remains the truth layer.
 
+The main product shell is a PySide6 desktop app. It calls the Python service directly in-process, so normal use does not require a hosted web server or internet connection.
+
 ```text
 PDFs
   |
@@ -31,6 +33,18 @@ Ollama generation or extractive fallback
 Citation validation
 ```
 
+## Desktop Shell
+
+The desktop app adds a thin UI/controller layer over `RagService`:
+
+- document import and library view
+- chat question entry and answer display
+- citation/source excerpt panel
+- settings dialog with data directory, Ollama URL, active model, embedding model, and readiness checks
+- PySide6 worker threads for ingestion and answering so the UI remains responsive
+
+The first Windows build uses PyInstaller and does not bundle Ollama model weights. Users install Ollama and pull models once, then run offline.
+
 ## Production Upgrade Path
 
 - Replace `LocalVectorStore` with Qdrant dense and sparse collections.
@@ -38,7 +52,8 @@ Citation validation
 - Use Docling OCR/table modes for PDF parsing.
 - Add persistent background jobs for long PDF ingestion.
 - Add evaluation datasets under `evaluation/datasets`.
-- Build the Next.js frontend against the API endpoints in `backend/app/api/main.py`.
+- Replace the initial desktop source excerpt panel with page-level PDF preview/highlighting.
+- Add richer desktop retrieval inspector and evaluation dashboards after the core app is stable.
 
 ## OKF Bundle Layout
 

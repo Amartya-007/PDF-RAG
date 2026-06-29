@@ -2,7 +2,10 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .ruff_cache/
+*.egg-info/
 .env
 backend/data/
 backend/.test-tmp/
+build/
+dist/
 *.sqlite3

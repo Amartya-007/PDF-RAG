@@ -2,7 +2,7 @@
 
 Source-grounded local RAG for PDF collections, with an optional OKF knowledge layer.
 
-This repository starts with a runnable Python backend core that works without paid APIs. It can ingest documents, chunk extracted text, build a local hybrid search index, retrieve cited evidence, and produce either an Ollama-generated answer or a conservative extractive fallback.
+This repository starts with a runnable Python backend core and a Windows-first offline desktop shell. It can ingest documents, chunk extracted text, build a local hybrid search index, retrieve cited evidence, and produce either an Ollama-generated answer or a conservative extractive fallback.
 
 The heavier production components from the proposal are intentionally integration points:
 
@@ -11,6 +11,7 @@ The heavier production components from the proposal are intentionally integratio
 - Ollama for local embeddings and answer generation
 - Qwen3 reranker through `sentence-transformers`
 - FastAPI for the HTTP API
+- PySide6 for the offline desktop product UI
 
 ## Quick Start
 
@@ -18,6 +19,29 @@ The heavier production components from the proposal are intentionally integratio
 py -m backend.app.cli init
 py -m backend.app.cli ingest .\some-document.pdf
 py -m backend.app.cli ask "What does this document say about leave limits?"
+```
+
+## Desktop App
+
+The main product direction is now a fully offline PySide6 desktop app. It calls the Python RAG service in-process and does not require a hosted server, Next.js, React, or internet during normal use.
+
+```powershell
+py -m pip install -e .[desktop]
+py -m desktop.app
+```
+
+The desktop app includes:
+
+- document library and local import
+- chat over ingested documents
+- source citations and excerpts
+- offline settings and Ollama/model readiness checks
+- background worker threads for ingestion and answering
+
+Windows executable packaging:
+
+```powershell
+pyinstaller desktop/packaging/local_pdf_rag_desktop.spec
 ```
 
 If your first files are PDFs and you have not installed a PDF parser yet, install the optional backend dependencies:
@@ -70,8 +94,8 @@ backend/
   tests/              stdlib unit tests
 docs/                 architecture notes
 evaluation/           evaluation dataset skeleton
-frontend/             future Next.js UI placeholder
 infrastructure/       Qdrant/Docker helper files
+desktop/              PySide6 offline desktop app and packaging spec
 ```
 
 ## Current MVP Behavior
@@ -84,6 +108,7 @@ infrastructure/       Qdrant/Docker helper files
 - Answers cite document name, page number, and chunk ID.
 - Unsupported answers fall back to: `I could not find sufficient evidence in the uploaded documents to answer this question.`
 - OKF bundles can be generated from ingested chunks, validated, imported, indexed, and used for retrieval.
+- The desktop app can run with Ollama disabled for fallback testing, or with local Ollama models for production offline use.
 
 The source PDF chunks remain the authority. OKF Markdown concepts are derived artifacts used to improve retrieval, not final citations.
 
