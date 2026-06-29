@@ -42,6 +42,8 @@ Then set `RAG_USE_OLLAMA=1` in your environment or copy `.env.example` into your
 py -m unittest discover -s backend/tests
 py -m backend.app.cli status
 py -m backend.app.cli retrieve "your question" --debug
+py -m backend.app.cli validate-okf .\path\to\okf-bundle
+py -m backend.app.cli import-okf .\path\to\okf-bundle
 ```
 
 After installing FastAPI/Uvicorn:
@@ -78,8 +80,19 @@ infrastructure/       Qdrant/Docker helper files
 - PDFs use Docling first when installed, PyMuPDF second when installed, and otherwise return a clear setup error.
 - Dense embeddings use Ollama when available, with a deterministic local hash embedding fallback for development tests.
 - Sparse retrieval uses an in-repo BM25 implementation.
-- Retrieval combines dense and sparse results with Reciprocal Rank Fusion.
+- Retrieval combines source dense, source sparse, and OKF concept-assisted source expansion with Reciprocal Rank Fusion.
 - Answers cite document name, page number, and chunk ID.
 - Unsupported answers fall back to: `I could not find sufficient evidence in the uploaded documents to answer this question.`
+- OKF bundles can be generated from ingested chunks, validated, imported, indexed, and used for retrieval.
 
 The source PDF chunks remain the authority. OKF Markdown concepts are derived artifacts used to improve retrieval, not final citations.
+
+## OKF Support
+
+The OKF layer uses portable Markdown files with YAML frontmatter:
+
+- Required validation: every concept file must have frontmatter with `type`; `type: concept` files must include `id` and `title`.
+- Metadata supported: `aliases`, `tags`, `related`, `depends_on`, `verification_status`, `source_chunk_ids`, `source_documents`, and `source_chunks`.
+- Generated bundles include `index.md`, `concepts/index.md`, and Markdown links between related concepts.
+- Imported bundles are copied into `backend/data/knowledge/`, stored in SQLite metadata, and indexed in both dense and BM25 concept indexes.
+- Query retrieval follows three paths: OKF concept retrieval, raw source dense retrieval, and raw source sparse retrieval. OKF concept hits expand back to original source chunk IDs before final reranking and citation.

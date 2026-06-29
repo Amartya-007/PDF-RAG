@@ -13,7 +13,9 @@ from backend.app.indexing.vector_store import LocalVectorStore
 from backend.app.ingestion.chunking import Chunker
 from backend.app.ingestion.cleaning import remove_repeated_headers_footers
 from backend.app.ingestion.parser.pdf_parser import PdfParser
+from backend.app.knowledge.okf import OkfConcept, validate_okf_bundle
 from backend.app.knowledge.okf_generator import OkfGenerator
+from backend.app.knowledge.okf_importer import OkfImporter
 from backend.app.models import Answer, Chunk, Document
 from backend.app.retrieval.fusion import reciprocal_rank_fusion
 from backend.app.retrieval.query_analysis import classify_query
@@ -31,9 +33,12 @@ class RagService:
         self.embedder = EmbeddingService(self.settings)
         self.vectors = LocalVectorStore(self.settings.indexes_dir / "vectors.json")
         self.sparse = BM25Index(self.settings.indexes_dir / "bm25.json")
+        self.okf_vectors = LocalVectorStore(self.settings.indexes_dir / "okf_vectors.json")
+        self.okf_sparse = BM25Index(self.settings.indexes_dir / "okf_bm25.json")
         self.reranker = Reranker()
         self.answerer = Answerer(self.settings)
         self.okf = OkfGenerator(self.settings.okf_dir, self.store)
+        self.okf_importer = OkfImporter(self.settings.okf_dir, self.store)
 
     def init(self) -> None:
         ensure_data_dirs(self.settings)
@@ -76,7 +81,19 @@ class RagService:
         self._rebuild_sparse()
         if build_okf:
             self.okf.generate_for_document(chunks)
+            self._rebuild_okf_indexes()
         return ready_document
+
+    def import_okf_bundle(self, source_root: Path) -> list[OkfConcept]:
+        concepts = self.okf_importer.import_bundle(source_root.resolve())
+        self._rebuild_okf_indexes()
+        return concepts
+
+    def validate_okf_bundle(self, source_root: Path) -> list[dict[str, str]]:
+        return [
+            issue.__dict__
+            for issue in validate_okf_bundle(source_root.resolve())
+        ]
 
     def retrieve(self, question: str, include_debug: bool = False) -> tuple[list[Chunk], dict[str, object]]:
         chunks = self.store.list_chunks()
@@ -84,8 +101,9 @@ class RagService:
         query_embedding = self.embedder.embed([question])[0]
         dense_results = self.vectors.search(query_embedding, self.settings.dense_top_k)
         sparse_results = self.sparse.search(question, self.settings.sparse_top_k)
+        okf_concept_results, okf_source_results = self._retrieve_okf_sources(question, query_embedding)
         fused = reciprocal_rank_fusion(
-            [dense_results, sparse_results],
+            [dense_results, sparse_results, okf_source_results],
             top_k=self.settings.fusion_top_k,
         )
         candidates = [by_id[chunk_id] for chunk_id, _score in fused if chunk_id in by_id]
@@ -97,6 +115,8 @@ class RagService:
                 "query_type": classify_query(question),
                 "dense_results": dense_results,
                 "sparse_results": sparse_results,
+                "okf_concept_results": okf_concept_results,
+                "okf_source_results": okf_source_results,
                 "fusion_results": fused,
                 "selected_chunk_ids": [chunk.chunk_id for chunk in selected],
             }
@@ -105,6 +125,9 @@ class RagService:
     def ask(self, question: str, include_debug: bool = False) -> Answer:
         chunks, debug = self.retrieve(question, include_debug=include_debug)
         return self.answerer.answer(question, chunks, debug=debug)
+
+    def close(self) -> None:
+        self.store.close()
 
     def _index_chunks(self, chunks: list[Chunk]) -> None:
         texts = [chunk.text for chunk in chunks]
@@ -118,6 +141,79 @@ class RagService:
         if chunks:
             self._index_chunks(chunks)
         self._rebuild_sparse()
+        self._rebuild_okf_indexes()
 
     def _rebuild_sparse(self) -> None:
         self.sparse.build(self.store.list_chunks())
+
+    def _rebuild_okf_indexes(self) -> None:
+        concept_chunks = self._concept_chunks(self.store.list_concepts())
+        if concept_chunks:
+            vectors = self.embedder.embed([chunk.text for chunk in concept_chunks])
+            self.okf_vectors.upsert_many(
+                {chunk.chunk_id: vector for chunk, vector in zip(concept_chunks, vectors)}
+            )
+        self.okf_sparse.build(concept_chunks)
+
+    def _retrieve_okf_sources(
+        self,
+        question: str,
+        query_embedding: list[float],
+    ) -> tuple[list[tuple[str, float]], list[tuple[str, float]]]:
+        concepts = self.store.list_concepts()
+        if not concepts:
+            return [], []
+
+        concept_by_chunk_id = {f"okf:{concept.concept_id}": concept for concept in concepts}
+        okf_dense = self.okf_vectors.search(query_embedding, 10)
+        okf_sparse = self.okf_sparse.search(question, 10)
+        okf_concept_results = reciprocal_rank_fusion([okf_dense, okf_sparse], top_k=10)
+
+        source_scores: dict[str, float] = {}
+        for rank, (concept_chunk_id, score) in enumerate(okf_concept_results, start=1):
+            concept = concept_by_chunk_id.get(concept_chunk_id)
+            if not concept:
+                continue
+            rank_score = score + 1.0 / rank
+            for source_chunk_id in concept.source_chunk_ids:
+                source_scores[source_chunk_id] = max(
+                    source_scores.get(source_chunk_id, 0.0),
+                    rank_score,
+                )
+
+        okf_source_results = sorted(source_scores.items(), key=lambda item: item[1], reverse=True)
+        return okf_concept_results, okf_source_results[: self.settings.sparse_top_k]
+
+    def _concept_chunks(self, concepts: list[OkfConcept]) -> list[Chunk]:
+        return [
+            Chunk(
+                chunk_id=f"okf:{concept.concept_id}",
+                document_id="okf",
+                filename=f"{concept.slug}.md",
+                page_start=1,
+                page_end=1,
+                section_path=("OKF", concept.title),
+                text=self._concept_search_text(concept),
+                chunk_type="okf_concept",
+                metadata={
+                    "concept_id": concept.concept_id,
+                    "source_chunk_ids": ",".join(concept.source_chunk_ids),
+                    "tags": ",".join(concept.tags),
+                    "related": ",".join(concept.related),
+                    "depends_on": ",".join(concept.depends_on),
+                },
+            )
+            for concept in concepts
+        ]
+
+    def _concept_search_text(self, concept: OkfConcept) -> str:
+        metadata_text = "\n".join(
+            [
+                f"Title: {concept.title}",
+                f"Aliases: {', '.join(concept.aliases)}",
+                f"Tags: {', '.join(concept.tags)}",
+                f"Related: {', '.join(concept.related)}",
+                f"Depends on: {', '.join(concept.depends_on)}",
+            ]
+        )
+        return f"{metadata_text}\n\n{concept.text}"

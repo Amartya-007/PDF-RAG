@@ -18,6 +18,12 @@ def main() -> None:
     ingest.add_argument("path")
     ingest.add_argument("--no-okf", action="store_true")
 
+    import_okf = subcommands.add_parser("import-okf")
+    import_okf.add_argument("path")
+
+    validate_okf = subcommands.add_parser("validate-okf")
+    validate_okf.add_argument("path")
+
     retrieve = subcommands.add_parser("retrieve")
     retrieve.add_argument("question")
     retrieve.add_argument("--debug", action="store_true")
@@ -39,6 +45,20 @@ def main() -> None:
     elif args.command == "ingest":
         document = service.ingest(Path(args.path), build_okf=not args.no_okf)
         print(json.dumps(document.__dict__, indent=2))
+    elif args.command == "import-okf":
+        concepts = service.import_okf_bundle(Path(args.path))
+        print(
+            json.dumps(
+                {
+                    "imported_concepts": len(concepts),
+                    "concept_ids": [concept.concept_id for concept in concepts],
+                },
+                indent=2,
+            )
+        )
+    elif args.command == "validate-okf":
+        issues = service.validate_okf_bundle(Path(args.path))
+        print(json.dumps({"issues": issues}, indent=2))
     elif args.command == "retrieve":
         chunks, debug = service.retrieve(args.question, include_debug=args.debug)
         payload = {

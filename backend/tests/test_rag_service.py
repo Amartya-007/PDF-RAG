@@ -29,6 +29,7 @@ class RagServiceTests(unittest.TestCase):
         self.assertTrue(answer.answerable)
         self.assertIn("[S1]", answer.answer)
         self.assertEqual(answer.citations[0].filename, "policy.txt")
+        service.close()
 
 
 if __name__ == "__main__":

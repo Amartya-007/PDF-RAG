@@ -23,6 +23,10 @@ class QueryRequest(BaseModel):
     include_debug: bool = False
 
 
+class OkfImportRequest(BaseModel):
+    path: str
+
+
 @app.get("/api/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -54,6 +58,20 @@ def query(request: QueryRequest) -> dict[str, object]:
         "answerable": answer.answerable,
         "citations": [citation.__dict__ for citation in answer.citations],
         "debug": answer.debug,
+    }
+
+
+@app.post("/api/okf/validate")
+def validate_okf(request: OkfImportRequest) -> dict[str, object]:
+    return {"issues": service.validate_okf_bundle(Path(request.path))}
+
+
+@app.post("/api/okf/import")
+def import_okf(request: OkfImportRequest) -> dict[str, object]:
+    concepts = service.import_okf_bundle(Path(request.path))
+    return {
+        "imported_concepts": len(concepts),
+        "concept_ids": [concept.concept_id for concept in concepts],
     }
 
 
