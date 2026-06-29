@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "local-pdf-rag"
+version = "0.1.0"
+description = "High-accuracy local PDF RAG with source citations and an optional OKF layer."
+requires-python = ">=3.12"
+dependencies = []
+
+[project.optional-dependencies]
+backend = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.30",
+  "pydantic>=2.8",
+  "sqlalchemy>=2.0",
+  "pymupdf>=1.24",
+  "ollama>=0.3",
+  "qdrant-client>=1.10",
+]
+pdf = [
+  "docling>=2.0",
+  "pymupdf>=1.24",
+]
+reranker = [
+  "sentence-transformers>=3.0",
+  "torch>=2.4",
+  "transformers>=4.44",
+]
+dev = [
+  "ruff>=0.6",
+  "pytest>=8.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["backend*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
