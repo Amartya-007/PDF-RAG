@@ -107,10 +107,44 @@ class MetadataStore:
             row = conn.execute("select * from documents where sha256 = ?", (sha256,)).fetchone()
         return self._document_from_row(row) if row else None
 
+    def update_document_status(self, document_id: str, status: str) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "update documents set status = ? where document_id = ?",
+                (status, document_id),
+            )
+
     def list_documents(self) -> list[Document]:
         with self.connect() as conn:
             rows = conn.execute("select * from documents order by created_at desc").fetchall()
         return [self._document_from_row(row) for row in rows]
+
+    def count_chunks_for_document(self, document_id: str) -> int:
+        with self.connect() as conn:
+            row = conn.execute(
+                "select count(*) as count from chunks where document_id = ?",
+                (document_id,),
+            ).fetchone()
+        return int(row["count"]) if row else 0
+
+    def mark_stale_processing_documents_failed(self) -> int:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                select d.document_id
+                from documents d
+                left join chunks c on c.document_id = d.document_id
+                where d.status = 'processing'
+                group by d.document_id
+                having count(c.chunk_id) = 0
+                """
+            ).fetchall()
+            document_ids = [row["document_id"] for row in rows]
+            conn.executemany(
+                "update documents set status = 'failed' where document_id = ?",
+                [(document_id,) for document_id in document_ids],
+            )
+        return len(document_ids)
 
     def replace_chunks(self, document_id: str, chunks: list[Chunk]) -> None:
         with self.connect() as conn:

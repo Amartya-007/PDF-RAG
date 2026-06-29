@@ -42,6 +42,9 @@ class DesktopController:
     def ingest(self, path: str | Path, build_okf: bool = True) -> Document:
         return self.service.ingest(Path(path), build_okf=build_okf)
 
+    def repair_unready_documents(self) -> list[Document]:
+        return self.service.repair_unready_documents()
+
     def ask(self, question: str, include_debug: bool = False) -> Answer:
         return self.service.ask(question, include_debug=include_debug)
 

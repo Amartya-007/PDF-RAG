@@ -54,8 +54,11 @@ class MainWindow(QMainWindow):
         self.settings_button.clicked.connect(self.show_settings)
         self.refresh_button = QPushButton("Refresh")
         self.refresh_button.clicked.connect(self.refresh_documents)
+        self.repair_button = QPushButton("Repair Stuck Imports")
+        self.repair_button.clicked.connect(self.repair_stuck_imports)
         toolbar.addWidget(self.import_button)
         toolbar.addWidget(self.refresh_button)
+        toolbar.addWidget(self.repair_button)
         toolbar.addStretch(1)
         toolbar.addWidget(self.settings_button)
         root_layout.addLayout(toolbar)
@@ -131,9 +134,22 @@ class MainWindow(QMainWindow):
         for path in paths:
             self._run_worker(f"Ingesting {Path(path).name}...", self.controller.ingest, path)
 
+    def repair_stuck_imports(self) -> None:
+        self._run_worker("Repairing stuck imports...", self.controller.repair_unready_documents)
+
     def ask_question(self) -> None:
         question = self.question_input.text().strip()
         if not question:
+            return
+        status = self.controller.status()
+        if status["documents"] and not status["chunks"]:
+            QMessageBox.warning(
+                self,
+                "No Searchable Text Yet",
+                "Your documents are listed, but none have searchable chunks yet.\n\n"
+                "Click 'Repair Stuck Imports' or reimport the PDFs. Documents should show "
+                "'ready' and the status bar should show Chunks greater than 0 before asking.",
+            )
             return
         self.question_input.clear()
         self.chat_view.append(f"<b>You:</b> {question}")
@@ -276,6 +292,9 @@ class MainWindow(QMainWindow):
             self._show_answer(result)
         elif isinstance(result, Document):
             self.chat_view.append(f"<i>Imported {result.filename}</i>")
+            self.refresh_documents()
+        elif isinstance(result, list):
+            self.chat_view.append(f"<i>Repaired {len(result)} document(s).</i>")
             self.refresh_documents()
         else:
             self.refresh_status()

@@ -28,6 +28,7 @@ class RagService:
         ensure_data_dirs(self.settings)
         self.store = MetadataStore(self.settings.sqlite_path)
         self.store.init()
+        self.store.mark_stale_processing_documents_failed()
         self.parser = PdfParser()
         self.chunker = Chunker()
         self.embedder = EmbeddingService(self.settings)
@@ -45,16 +46,17 @@ class RagService:
         self.store.init()
         self._rebuild_indexes()
 
-    def ingest(self, source_path: Path, build_okf: bool = True) -> Document:
+    def ingest(self, source_path: Path, build_okf: bool = True, force: bool = False) -> Document:
         source_path = source_path.resolve()
         file_hash = sha256_file(source_path)
         existing = self.store.find_document_by_hash(file_hash)
-        if existing:
+        if existing and not force and existing.status == "ready" and self.store.count_chunks_for_document(existing.document_id) > 0:
             return existing
 
-        document_id = stable_id("doc", source_path.name, file_hash)
+        document_id = existing.document_id if existing else stable_id("doc", source_path.name, file_hash)
         target = self.settings.documents_dir / f"{document_id}{source_path.suffix.lower()}"
-        shutil.copy2(source_path, target)
+        if source_path != target.resolve():
+            shutil.copy2(source_path, target)
         document = Document(
             document_id=document_id,
             filename=source_path.name,
@@ -64,9 +66,15 @@ class RagService:
         )
         self.store.upsert_document(document)
 
-        pages = self.parser.parse(target)
-        pages = remove_repeated_headers_footers(pages)
-        chunks = self.chunker.chunk_pages(document, pages)
+        try:
+            pages = self.parser.parse(target)
+            pages = remove_repeated_headers_footers(pages)
+            chunks = self.chunker.chunk_pages(document, pages)
+            if not chunks:
+                raise ValueError("The document was parsed, but no searchable text chunks were created.")
+        except Exception:
+            self.store.update_document_status(document.document_id, "failed")
+            raise
 
         ready_document = Document(
             document_id=document.document_id,
@@ -83,6 +91,19 @@ class RagService:
             self.okf.generate_for_document(chunks)
             self._rebuild_okf_indexes()
         return ready_document
+
+    def repair_unready_documents(self, build_okf: bool = True) -> list[Document]:
+        repaired: list[Document] = []
+        for document in self.store.list_documents():
+            chunk_count = self.store.count_chunks_for_document(document.document_id)
+            if document.status == "ready" and chunk_count > 0:
+                continue
+            path = Path(document.path)
+            if not path.exists():
+                self.store.update_document_status(document.document_id, "failed")
+                continue
+            repaired.append(self.ingest(path, build_okf=build_okf, force=True))
+        return repaired
 
     def import_okf_bundle(self, source_root: Path) -> list[OkfConcept]:
         concepts = self.okf_importer.import_bundle(source_root.resolve())
