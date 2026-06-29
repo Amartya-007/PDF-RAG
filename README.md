@@ -37,6 +37,8 @@ The desktop app includes:
 - source citations and excerpts
 - offline settings and Ollama/model readiness checks
 - background worker threads for ingestion and answering
+- installed Ollama model selection for answer and embedding models
+- local PDF parsing through PyMuPDF
 
 Windows executable packaging:
 
@@ -109,6 +111,7 @@ desktop/              PySide6 offline desktop app and packaging spec
 - Unsupported answers fall back to: `I could not find sufficient evidence in the uploaded documents to answer this question.`
 - OKF bundles can be generated from ingested chunks, validated, imported, indexed, and used for retrieval.
 - The desktop app can run with Ollama disabled for fallback testing, or with local Ollama models for production offline use.
+- The desktop install includes PyMuPDF, so normal text PDFs work without installing Docling. Docling remains the stronger optional parser/OCR path for scanned or complex PDFs.
 
 The source PDF chunks remain the authority. OKF Markdown concepts are derived artifacts used to improve retrieval, not final citations.
 

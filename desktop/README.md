@@ -22,6 +22,8 @@ ollama pull qwen3-embedding:4b
 
 Then run the app offline. The Settings dialog reports whether Ollama is reachable and which models are missing.
 
+The Settings dialog also lets you enable/disable Ollama and choose any installed Ollama model for answer generation and embeddings. Use **Refresh Models** after pulling new models.
+
 ## Windows Build
 
 ```powershell

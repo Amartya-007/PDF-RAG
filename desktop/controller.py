@@ -8,6 +8,7 @@ from backend.app.core.config import Settings, get_settings
 from backend.app.models import Answer, Chunk, Document
 from backend.app.rag_service import RagService
 from desktop.model_readiness import ModelReadiness, ModelReadinessChecker
+from desktop.preferences import DesktopPreferences, apply_preferences, save_preferences
 
 
 class DesktopController:
@@ -58,6 +59,29 @@ class DesktopController:
 
     def model_readiness_dict(self) -> dict[str, Any]:
         return asdict(self.model_readiness())
+
+    def available_ollama_models(self, base_url: str | None = None) -> list[str]:
+        return self.readiness_checker.list_models(base_url or self.settings.ollama_base_url)
+
+    def update_preferences(
+        self,
+        *,
+        use_ollama: bool,
+        ollama_base_url: str,
+        active_model: str,
+        embedding_model: str,
+    ) -> None:
+        preferences = DesktopPreferences(
+            use_ollama=use_ollama,
+            ollama_base_url=ollama_base_url,
+            active_model=active_model,
+            embedding_model=embedding_model,
+        )
+        save_preferences(preferences)
+        apply_preferences(preferences)
+        self.service.close()
+        self.settings = get_settings()
+        self.service = RagService(self.settings)
 
     def close(self) -> None:
         self.service.close()

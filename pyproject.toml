@@ -30,6 +30,7 @@ reranker = [
 ]
 desktop = [
   "PySide6>=6.7",
+  "pymupdf>=1.24",
   "pyinstaller>=6.10",
 ]
 dev = [

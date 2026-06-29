@@ -14,6 +14,7 @@ def configure_desktop_environment() -> Path:
     else:
         data_dir = default_app_data_dir()
         os.environ["RAG_DATA_DIR"] = str(data_dir)
+    os.environ.setdefault("RAG_USE_OLLAMA", "1")
     os.environ.setdefault("RAG_ACTIVE_MODEL", "qwen3.5:4b")
     return data_dir
 

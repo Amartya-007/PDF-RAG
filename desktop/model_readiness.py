@@ -40,7 +40,7 @@ class ModelReadinessChecker:
             )
 
         try:
-            available = self._ollama_models(settings.ollama_base_url)
+            available = self.list_models(settings.ollama_base_url)
         except OSError:
             return ModelReadiness(
                 ollama_required=True,
@@ -68,7 +68,7 @@ class ModelReadinessChecker:
             ),
         )
 
-    def _ollama_models(self, base_url: str) -> list[str]:
+    def list_models(self, base_url: str) -> list[str]:
         url = f"{base_url.rstrip('/')}/api/tags"
         request = urllib.request.Request(url, method="GET")
         try:

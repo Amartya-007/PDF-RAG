@@ -7,6 +7,8 @@ try:
     from PySide6.QtWidgets import (
         QApplication,
         QDialog,
+        QCheckBox,
+        QComboBox,
         QFileDialog,
         QFormLayout,
         QHBoxLayout,
@@ -143,24 +145,116 @@ class MainWindow(QMainWindow):
         dialog.setWindowTitle("Offline Settings")
         layout = QVBoxLayout(dialog)
         form = QFormLayout()
+        use_ollama = QCheckBox("Use Ollama for local models")
+        use_ollama.setChecked(self.controller.settings.use_ollama)
+        ollama_url = QLineEdit(self.controller.settings.ollama_base_url)
+        active_model = QComboBox()
+        active_model.setEditable(True)
+        embedding_model = QComboBox()
+        embedding_model.setEditable(True)
+        available_models = readiness.available_models
+        if not available_models and readiness.ollama_reachable:
+            try:
+                available_models = self.controller.available_ollama_models()
+            except OSError:
+                available_models = []
+        for model in available_models:
+            active_model.addItem(model)
+            embedding_model.addItem(model)
+        self._set_combo_text(active_model, self.controller.settings.active_model)
+        self._set_combo_text(embedding_model, self.controller.settings.embedding_model)
         form.addRow("Data directory", QLabel(str(self.controller.settings.data_dir)))
-        form.addRow("Ollama URL", QLabel(self.controller.settings.ollama_base_url))
-        form.addRow("Active model", QLabel(self.controller.settings.active_model))
-        form.addRow("Embedding model", QLabel(self.controller.settings.embedding_model))
+        form.addRow("Ollama enabled", use_ollama)
+        form.addRow("Ollama URL", ollama_url)
+        form.addRow("Active model", active_model)
+        form.addRow("Embedding model", embedding_model)
         form.addRow("Ollama required", QLabel("Yes" if readiness.ollama_required else "No"))
         form.addRow("Ollama reachable", QLabel("Yes" if readiness.ollama_reachable else "No"))
         form.addRow("Offline ready", QLabel("Yes" if readiness.ready else "No"))
         layout.addLayout(form)
         commands = QPlainTextEdit()
         commands.setReadOnly(True)
-        commands.setPlainText("\n".join(readiness.setup_commands) or readiness.message)
+        model_list = "\n".join(f"- {model}" for model in available_models)
+        commands.setPlainText(
+            "\n".join(readiness.setup_commands)
+            or readiness.message
+            + ("\n\nInstalled Ollama models:\n" + model_list if model_list else "")
+        )
         layout.addWidget(QLabel("Setup commands / status"))
         layout.addWidget(commands)
+        buttons = QHBoxLayout()
+        refresh_models = QPushButton("Refresh Models")
+        refresh_models.clicked.connect(
+            lambda: self._refresh_model_combos(ollama_url.text().strip(), active_model, embedding_model)
+        )
+        save = QPushButton("Save Settings")
+        save.clicked.connect(
+            lambda: self._save_settings(
+                dialog,
+                use_ollama.isChecked(),
+                ollama_url.text().strip(),
+                active_model.currentText().strip(),
+                embedding_model.currentText().strip(),
+            )
+        )
         close = QPushButton("Close")
-        close.clicked.connect(dialog.accept)
-        layout.addWidget(close)
+        close.clicked.connect(dialog.reject)
+        buttons.addWidget(refresh_models)
+        buttons.addStretch(1)
+        buttons.addWidget(save)
+        buttons.addWidget(close)
+        layout.addLayout(buttons)
         dialog.resize(620, 420)
         dialog.exec()
+
+    def _set_combo_text(self, combo: QComboBox, text: str) -> None:
+        index = combo.findText(text)
+        if index >= 0:
+            combo.setCurrentIndex(index)
+        else:
+            combo.addItem(text)
+            combo.setCurrentText(text)
+
+    def _refresh_model_combos(
+        self,
+        ollama_url: str,
+        active_model: QComboBox,
+        embedding_model: QComboBox,
+    ) -> None:
+        try:
+            models = self.controller.available_ollama_models(ollama_url)
+        except OSError as exc:
+            QMessageBox.warning(self, "Ollama Models", f"Could not reach Ollama:\n{exc}")
+            return
+        current_active = active_model.currentText()
+        current_embedding = embedding_model.currentText()
+        active_model.clear()
+        embedding_model.clear()
+        for model in models:
+            active_model.addItem(model)
+            embedding_model.addItem(model)
+        self._set_combo_text(active_model, current_active)
+        self._set_combo_text(embedding_model, current_embedding)
+
+    def _save_settings(
+        self,
+        dialog: QDialog,
+        use_ollama: bool,
+        ollama_url: str,
+        active_model: str,
+        embedding_model: str,
+    ) -> None:
+        if not active_model or not embedding_model:
+            QMessageBox.warning(self, "Settings", "Choose both an active model and an embedding model.")
+            return
+        self.controller.update_preferences(
+            use_ollama=use_ollama,
+            ollama_base_url=ollama_url or "http://localhost:11434",
+            active_model=active_model,
+            embedding_model=embedding_model,
+        )
+        self.refresh_documents()
+        dialog.accept()
 
     def _run_worker(self, label: str, fn: object, *args: object) -> None:
         worker = FunctionWorker(label, fn, *args)
@@ -191,7 +285,18 @@ class MainWindow(QMainWindow):
         self.progress.setValue(1)
         QApplication.restoreOverrideCursor()
         self.status_label.setText("Error")
-        QMessageBox.critical(self, "Local PDF RAG Error", message)
+        QMessageBox.critical(self, "Local PDF RAG Error", self._friendly_error(message))
+
+    def _friendly_error(self, message: str) -> str:
+        if "PDF parsing requires Docling or PyMuPDF" in message:
+            return (
+                "PDF parsing is not available in this Python environment.\n\n"
+                "Fix:\n"
+                "  py -m pip install -e .[desktop]\n\n"
+                "The desktop extra now includes PyMuPDF for local PDF parsing. "
+                "Restart the app after installing."
+            )
+        return message
 
     def _show_answer(self, answer: Answer) -> None:
         self.chat_view.append(f"<b>Assistant:</b> {answer.answer}")

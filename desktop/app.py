@@ -16,8 +16,10 @@ def main() -> int:
 
     from desktop.controller import DesktopController
     from desktop.main_window import MainWindow
+    from desktop.preferences import apply_preferences, load_preferences
 
     configure_desktop_environment()
+    apply_preferences(load_preferences())
     app = QApplication(sys.argv)
     app.setApplicationName("Local PDF RAG")
     controller = DesktopController()

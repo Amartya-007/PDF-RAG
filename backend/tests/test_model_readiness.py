@@ -13,7 +13,7 @@ class FakeChecker(ModelReadinessChecker):
         self.available = available or []
         self.fail = fail
 
-    def _ollama_models(self, base_url: str) -> list[str]:
+    def list_models(self, base_url: str) -> list[str]:
         if self.fail:
             raise OSError("offline")
         return self.available
