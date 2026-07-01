@@ -17,11 +17,13 @@ def main() -> int:
     from desktop.controller import DesktopController
     from desktop.main_window import MainWindow
     from desktop.preferences import apply_preferences, load_preferences
+    from desktop.theme import STYLESHEET
 
     configure_desktop_environment()
     apply_preferences(load_preferences())
     app = QApplication(sys.argv)
     app.setApplicationName("Local PDF RAG")
+    app.setStyleSheet(STYLESHEET)
     controller = DesktopController()
     window = MainWindow(controller)
     window.resize(1280, 780)

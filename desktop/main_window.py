@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import html
 from pathlib import Path
 
 try:
-    from PySide6.QtCore import QThreadPool, Qt
+    from PySide6.QtCore import QSize, QThreadPool, Qt
     from PySide6.QtWidgets import (
         QApplication,
         QDialog,
@@ -11,15 +12,18 @@ try:
         QComboBox,
         QFileDialog,
         QFormLayout,
+        QFrame,
         QHBoxLayout,
         QLabel,
         QLineEdit,
         QListWidget,
+        QListWidgetItem,
         QMainWindow,
         QMessageBox,
         QPlainTextEdit,
         QProgressBar,
         QPushButton,
+        QSizePolicy,
         QSplitter,
         QTextBrowser,
         QVBoxLayout,
@@ -30,6 +34,7 @@ except ImportError as exc:  # pragma: no cover - exercised only when launching t
 
 from backend.app.models import Answer, Document
 from desktop.controller import DesktopController
+from desktop.theme import Colors, status_badge_style
 from desktop.workers import FunctionWorker
 
 
@@ -39,90 +44,237 @@ class MainWindow(QMainWindow):
         self.controller = controller
         self.thread_pool = QThreadPool.globalInstance()
         self.setWindowTitle("Local PDF RAG")
+        self._chat_started = False
         self._build_ui()
         self.refresh_documents()
         self.refresh_status()
 
+    # ------------------------------------------------------------------
+    # Layout
+    # ------------------------------------------------------------------
+
     def _build_ui(self) -> None:
         root = QWidget()
+        root.setObjectName("root")
         root_layout = QVBoxLayout(root)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
 
-        toolbar = QHBoxLayout()
+        root_layout.addWidget(self._build_header())
+
+        body = QWidget()
+        body_layout = QVBoxLayout(body)
+        body_layout.setContentsMargins(16, 16, 16, 12)
+        body_layout.setSpacing(10)
+
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.setChildrenCollapsible(False)
+        splitter.addWidget(self._build_documents_panel())
+        splitter.addWidget(self._build_chat_panel())
+        splitter.addWidget(self._build_citations_panel())
+        splitter.setSizes([260, 640, 380])
+        body_layout.addWidget(splitter, 1)
+
+        body_layout.addLayout(self._build_status_row())
+        root_layout.addWidget(body, 1)
+
+        self.setCentralWidget(root)
+
+    def _build_header(self) -> QFrame:
+        header = QFrame()
+        header.setObjectName("headerBar")
+        layout = QHBoxLayout(header)
+        layout.setContentsMargins(20, 14, 20, 14)
+        layout.setSpacing(16)
+
+        title_box = QVBoxLayout()
+        title_box.setSpacing(2)
+        title = QLabel("Local PDF RAG")
+        title.setObjectName("appTitle")
+        subtitle = QLabel("Offline document Q&A with source citations")
+        subtitle.setObjectName("appSubtitle")
+        title_box.addWidget(title)
+        title_box.addWidget(subtitle)
+        layout.addLayout(title_box)
+        layout.addStretch(1)
+
+        self.connection_pill = QLabel()
+        self.connection_pill.setMinimumHeight(28)
+        layout.addWidget(self.connection_pill)
+
         self.import_button = QPushButton("Import PDFs / Text")
+        self.import_button.setObjectName("primaryButton")
         self.import_button.clicked.connect(self.import_documents)
-        self.settings_button = QPushButton("Settings")
-        self.settings_button.clicked.connect(self.show_settings)
         self.refresh_button = QPushButton("Refresh")
         self.refresh_button.clicked.connect(self.refresh_documents)
         self.repair_button = QPushButton("Repair Stuck Imports")
         self.repair_button.clicked.connect(self.repair_stuck_imports)
-        toolbar.addWidget(self.import_button)
-        toolbar.addWidget(self.refresh_button)
-        toolbar.addWidget(self.repair_button)
-        toolbar.addStretch(1)
-        toolbar.addWidget(self.settings_button)
-        root_layout.addLayout(toolbar)
+        self.settings_button = QPushButton("Settings")
+        self.settings_button.clicked.connect(self.show_settings)
 
-        splitter = QSplitter(Qt.Orientation.Horizontal)
+        for button in (self.repair_button, self.refresh_button, self.settings_button, self.import_button):
+            layout.addWidget(button)
 
-        left_panel = QWidget()
-        left_layout = QVBoxLayout(left_panel)
-        left_layout.addWidget(QLabel("Documents"))
+        return header
+
+    def _build_documents_panel(self) -> QFrame:
+        panel = QFrame()
+        panel.setObjectName("panel")
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(14, 12, 14, 14)
+        layout.setSpacing(8)
+
+        header_row = QHBoxLayout()
+        title = QLabel("DOCUMENTS")
+        title.setObjectName("sectionTitle")
+        header_row.addWidget(title)
+        header_row.addStretch(1)
+        self.document_count_label = QLabel("")
+        self.document_count_label.setStyleSheet(f"color: {Colors.text_faint}; font-size: 11px;")
+        header_row.addWidget(self.document_count_label)
+        layout.addLayout(header_row)
+
         self.document_list = QListWidget()
-        left_layout.addWidget(self.document_list)
-        splitter.addWidget(left_panel)
+        self.document_list.setSpacing(2)
+        self.document_list.setUniformItemSizes(False)
+        layout.addWidget(self.document_list, 1)
+        return panel
 
-        center_panel = QWidget()
-        center_layout = QVBoxLayout(center_panel)
-        center_layout.addWidget(QLabel("Chat"))
+    def _build_chat_panel(self) -> QFrame:
+        panel = QFrame()
+        panel.setObjectName("panel")
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(14, 12, 14, 14)
+        layout.setSpacing(8)
+
+        title = QLabel("CHAT")
+        title.setObjectName("sectionTitle")
+        layout.addWidget(title)
+
         self.chat_view = QTextBrowser()
         self.chat_view.setOpenExternalLinks(False)
-        center_layout.addWidget(self.chat_view)
+        self.chat_view.setHtml(self._empty_chat_html())
+        layout.addWidget(self.chat_view, 1)
+
         question_row = QHBoxLayout()
+        question_row.setSpacing(8)
         self.question_input = QLineEdit()
         self.question_input.setPlaceholderText("Ask a question about your local documents...")
         self.question_input.returnPressed.connect(self.ask_question)
         self.ask_button = QPushButton("Ask")
+        self.ask_button.setObjectName("primaryButton")
         self.ask_button.clicked.connect(self.ask_question)
-        question_row.addWidget(self.question_input)
+        question_row.addWidget(self.question_input, 1)
         question_row.addWidget(self.ask_button)
-        center_layout.addLayout(question_row)
-        splitter.addWidget(center_panel)
+        layout.addLayout(question_row)
+        return panel
 
-        right_panel = QWidget()
-        right_layout = QVBoxLayout(right_panel)
-        right_layout.addWidget(QLabel("Citations and Source Excerpts"))
-        self.citation_view = QPlainTextEdit()
-        self.citation_view.setReadOnly(True)
-        right_layout.addWidget(self.citation_view)
-        splitter.addWidget(right_panel)
+    def _build_citations_panel(self) -> QFrame:
+        panel = QFrame()
+        panel.setObjectName("panel")
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(14, 12, 14, 14)
+        layout.setSpacing(8)
 
-        splitter.setSizes([260, 620, 400])
-        root_layout.addWidget(splitter)
+        title = QLabel("CITATIONS & SOURCE EXCERPTS")
+        title.setObjectName("sectionTitle")
+        layout.addWidget(title)
 
+        self.citation_view = QTextBrowser()
+        self.citation_view.setOpenExternalLinks(False)
+        self.citation_view.setHtml(self._empty_citations_html())
+        layout.addWidget(self.citation_view, 1)
+        return panel
+
+    def _build_status_row(self) -> QHBoxLayout:
         status_row = QHBoxLayout()
+        status_row.setSpacing(10)
+        self.status_dot = QLabel("\u25cf")
+        self.status_dot.setStyleSheet(f"color: {Colors.success}; font-size: 10px;")
         self.status_label = QLabel("Ready")
+        self.status_label.setStyleSheet(f"color: {Colors.text_muted}; font-size: 12px;")
         self.progress = QProgressBar()
         self.progress.setRange(0, 1)
         self.progress.setValue(1)
+        self.progress.setFixedWidth(160)
+        self.progress.setTextVisible(False)
+        status_row.addWidget(self.status_dot)
         status_row.addWidget(self.status_label, 1)
         status_row.addWidget(self.progress)
-        root_layout.addLayout(status_row)
+        return status_row
 
-        self.setCentralWidget(root)
+    # ------------------------------------------------------------------
+    # Data refresh
+    # ------------------------------------------------------------------
 
     def refresh_documents(self) -> None:
         self.document_list.clear()
-        for document in self.controller.list_documents():
-            self.document_list.addItem(f"{document.filename}  [{document.status}]")
+        documents = self.controller.list_documents()
+        if not documents:
+            self.document_count_label.setText("0")
+            placeholder = QListWidgetItem()
+            placeholder.setFlags(Qt.ItemFlag.NoItemFlags)
+            self.document_list.addItem(placeholder)
+            self.document_list.setItemWidget(placeholder, self._empty_state_widget(
+                "No documents yet.\nImport a PDF to get started."
+            ))
+        else:
+            self.document_count_label.setText(str(len(documents)))
+            for document in documents:
+                self._add_document_row(document)
         self.refresh_status()
+
+    def _add_document_row(self, document: Document) -> None:
+        item = QListWidgetItem()
+        item.setSizeHint(QSize(0, 56))
+        self.document_list.addItem(item)
+        self.document_list.setItemWidget(item, self._document_row_widget(document))
+
+    def _document_row_widget(self, document: Document) -> QWidget:
+        row = QWidget()
+        layout = QVBoxLayout(row)
+        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setSpacing(4)
+
+        name_label = QLabel(document.filename)
+        name_label.setStyleSheet("font-size: 12px; font-weight: 600;")
+        name_label.setWordWrap(True)
+        layout.addWidget(name_label)
+
+        bg, fg, label = status_badge_style(document.status)
+        badge_row = QHBoxLayout()
+        badge = QLabel(label)
+        badge.setStyleSheet(
+            f"background-color: {bg}; color: {fg}; font-size: 10px; font-weight: 700;"
+            "border-radius: 8px; padding: 2px 8px;"
+        )
+        badge.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        badge_row.addWidget(badge)
+        badge_row.addStretch(1)
+        layout.addLayout(badge_row)
+        return row
 
     def refresh_status(self) -> None:
         status = self.controller.status()
+        ready = bool(status["ollama_ready"])
+        dot_color = Colors.success if ready else Colors.warning
+        self.status_dot.setStyleSheet(f"color: {dot_color}; font-size: 10px;")
         self.status_label.setText(
-            f"Documents: {status['documents']} | Chunks: {status['chunks']} | "
-            f"Concepts: {status['concepts']} | {status['ollama_message']}"
+            f"Documents: {status['documents']}  \u00b7  Chunks: {status['chunks']}  \u00b7  "
+            f"Concepts: {status['concepts']}  \u00b7  {status['ollama_message']}"
         )
+        pill_bg = Colors.success_soft if ready else Colors.warning_soft
+        pill_fg = Colors.success if ready else Colors.warning
+        pill_text = "Models ready" if ready else "Setup needed"
+        self.connection_pill.setText(pill_text)
+        self.connection_pill.setStyleSheet(
+            f"background-color: {pill_bg}; color: {pill_fg}; font-size: 11px; font-weight: 700;"
+            "border-radius: 14px; padding: 5px 14px;"
+        )
+
+    # ------------------------------------------------------------------
+    # Actions
+    # ------------------------------------------------------------------
 
     def import_documents(self) -> None:
         paths, _filter = QFileDialog.getOpenFileNames(
@@ -152,7 +304,8 @@ class MainWindow(QMainWindow):
             )
             return
         self.question_input.clear()
-        self.chat_view.append(f"<b>You:</b> {question}")
+        self._clear_empty_chat_if_needed()
+        self._append_chat_bubble("user", question)
         self._run_worker("Answering question...", self.controller.ask, question, False)
 
     def show_settings(self) -> None:
@@ -160,7 +313,9 @@ class MainWindow(QMainWindow):
         dialog = QDialog(self)
         dialog.setWindowTitle("Offline Settings")
         layout = QVBoxLayout(dialog)
+        layout.setSpacing(12)
         form = QFormLayout()
+        form.setSpacing(10)
         use_ollama = QCheckBox("Use Ollama for local models")
         use_ollama.setChecked(self.controller.settings.use_ollama)
         ollama_url = QLineEdit(self.controller.settings.ollama_base_url)
@@ -184,10 +339,13 @@ class MainWindow(QMainWindow):
         form.addRow("Ollama URL", ollama_url)
         form.addRow("Active model", active_model)
         form.addRow("Embedding model", embedding_model)
-        form.addRow("Ollama required", QLabel("Yes" if readiness.ollama_required else "No"))
-        form.addRow("Ollama reachable", QLabel("Yes" if readiness.ollama_reachable else "No"))
-        form.addRow("Offline ready", QLabel("Yes" if readiness.ready else "No"))
+        form.addRow("Ollama required", self._status_value_label(readiness.ollama_required))
+        form.addRow("Ollama reachable", self._status_value_label(readiness.ollama_reachable))
+        form.addRow("Offline ready", self._status_value_label(readiness.ready))
         layout.addLayout(form)
+        commands_title = QLabel("SETUP COMMANDS / STATUS")
+        commands_title.setObjectName("sectionTitle")
+        layout.addWidget(commands_title)
         commands = QPlainTextEdit()
         commands.setReadOnly(True)
         model_list = "\n".join(f"- {model}" for model in available_models)
@@ -196,7 +354,6 @@ class MainWindow(QMainWindow):
             or readiness.message
             + ("\n\nInstalled Ollama models:\n" + model_list if model_list else "")
         )
-        layout.addWidget(QLabel("Setup commands / status"))
         layout.addWidget(commands)
         buttons = QHBoxLayout()
         refresh_models = QPushButton("Refresh Models")
@@ -204,6 +361,7 @@ class MainWindow(QMainWindow):
             lambda: self._refresh_model_combos(ollama_url.text().strip(), active_model, embedding_model)
         )
         save = QPushButton("Save Settings")
+        save.setObjectName("primaryButton")
         save.clicked.connect(
             lambda: self._save_settings(
                 dialog,
@@ -220,8 +378,15 @@ class MainWindow(QMainWindow):
         buttons.addWidget(save)
         buttons.addWidget(close)
         layout.addLayout(buttons)
-        dialog.resize(620, 420)
+        dialog.resize(640, 460)
         dialog.exec()
+
+    @staticmethod
+    def _status_value_label(value: bool) -> QLabel:
+        label = QLabel("Yes" if value else "No")
+        color = Colors.success if value else Colors.danger
+        label.setStyleSheet(f"color: {color}; font-weight: 700;")
+        return label
 
     def _set_combo_text(self, combo: QComboBox, text: str) -> None:
         index = combo.findText(text)
@@ -272,6 +437,10 @@ class MainWindow(QMainWindow):
         self.refresh_documents()
         dialog.accept()
 
+    # ------------------------------------------------------------------
+    # Background work
+    # ------------------------------------------------------------------
+
     def _run_worker(self, label: str, fn: object, *args: object) -> None:
         worker = FunctionWorker(label, fn, *args)
         worker.signals.started.connect(self._worker_started)
@@ -281,6 +450,7 @@ class MainWindow(QMainWindow):
 
     def _worker_started(self, label: str) -> None:
         self.status_label.setText(label)
+        self.status_dot.setStyleSheet(f"color: {Colors.accent}; font-size: 10px;")
         self.progress.setRange(0, 0)
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
 
@@ -291,10 +461,10 @@ class MainWindow(QMainWindow):
         if isinstance(result, Answer):
             self._show_answer(result)
         elif isinstance(result, Document):
-            self.chat_view.append(f"<i>Imported {result.filename}</i>")
+            self._append_chat_note(f"Imported {result.filename}")
             self.refresh_documents()
         elif isinstance(result, list):
-            self.chat_view.append(f"<i>Repaired {len(result)} document(s).</i>")
+            self._append_chat_note(f"Repaired {len(result)} document(s).")
             self.refresh_documents()
         else:
             self.refresh_status()
@@ -303,6 +473,7 @@ class MainWindow(QMainWindow):
         self.progress.setRange(0, 1)
         self.progress.setValue(1)
         QApplication.restoreOverrideCursor()
+        self.status_dot.setStyleSheet(f"color: {Colors.danger}; font-size: 10px;")
         self.status_label.setText("Error")
         QMessageBox.critical(self, "Local PDF RAG Error", self._friendly_error(message))
 
@@ -325,22 +496,107 @@ class MainWindow(QMainWindow):
             )
         return message
 
+    # ------------------------------------------------------------------
+    # Chat & citation rendering
+    # ------------------------------------------------------------------
+
+    def _empty_chat_html(self) -> str:
+        return (
+            f"<div style='color:{Colors.text_faint}; padding: 24px; text-align:center;'>"
+            "No messages yet.<br>Import a document and ask a question to get started."
+            "</div>"
+        )
+
+    def _empty_citations_html(self) -> str:
+        return (
+            f"<div style='color:{Colors.text_faint}; padding: 24px; text-align:center;'>"
+            "Citations for your next answer will appear here."
+            "</div>"
+        )
+
+    def _clear_empty_chat_if_needed(self) -> None:
+        if not self._chat_started:
+            self.chat_view.setHtml("")
+            self._chat_started = True
+
+    def _append_chat_bubble(self, role: str, text: str) -> None:
+        escaped = html.escape(text).replace("\n", "<br>")
+        if role == "user":
+            bubble = (
+                "<div style='margin: 6px 0; text-align: right;'>"
+                f"<span style='background-color:{Colors.user_bubble}; color:{Colors.user_bubble_text}; "
+                "border-radius: 12px; padding: 8px 14px; display: inline-block; max-width: 80%; "
+                f"font-size: 13px;'>{escaped}</span></div>"
+            )
+        else:
+            bubble = (
+                "<div style='margin: 6px 0; text-align: left;'>"
+                f"<span style='background-color:{Colors.assistant_bubble}; color:{Colors.assistant_bubble_text}; "
+                "border-radius: 12px; padding: 8px 14px; display: inline-block; max-width: 80%; "
+                f"font-size: 13px;'>{escaped}</span></div>"
+            )
+        self.chat_view.append(bubble)
+        self._scroll_chat_to_bottom()
+
+    def _append_chat_note(self, text: str) -> None:
+        self._clear_empty_chat_if_needed()
+        note = (
+            f"<div style='margin: 8px 0; text-align: center; color:{Colors.text_faint}; font-size: 11px;'>"
+            f"{html.escape(text)}</div>"
+        )
+        self.chat_view.append(note)
+        self._scroll_chat_to_bottom()
+
+    def _scroll_chat_to_bottom(self) -> None:
+        scrollbar = self.chat_view.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
+
+    def _empty_state_widget(self, text: str) -> QWidget:
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(8, 24, 8, 24)
+        label = QLabel(text)
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        label.setWordWrap(True)
+        label.setStyleSheet(f"color: {Colors.text_faint}; font-size: 12px;")
+        layout.addWidget(label)
+        return widget
+
     def _show_answer(self, answer: Answer) -> None:
-        self.chat_view.append(f"<b>Assistant:</b> {answer.answer}")
-        citation_lines: list[str] = []
-        for citation in answer.citations:
-            pages = (
-                str(citation.page_start)
-                if citation.page_start == citation.page_end
-                else f"{citation.page_start}-{citation.page_end}"
+        self._clear_empty_chat_if_needed()
+        self._append_chat_bubble("assistant", answer.answer)
+        if not answer.citations:
+            self.citation_view.setHtml(
+                f"<div style='color:{Colors.text_faint}; padding: 24px; text-align:center;'>"
+                "No citations for this answer.</div>"
             )
-            citation_lines.extend(
-                [
-                    f"{citation.source_id} | {citation.filename} | page {pages}",
-                    f"Chunk: {citation.chunk_id}",
-                    citation.excerpt,
-                    "",
-                ]
-            )
-        self.citation_view.setPlainText("\n".join(citation_lines))
+        else:
+            cards = []
+            for citation in answer.citations:
+                pages = (
+                    str(citation.page_start)
+                    if citation.page_start == citation.page_end
+                    else f"{citation.page_start}-{citation.page_end}"
+                )
+                cards.append(
+                    "<div style='border:1px solid {border}; border-radius:10px; padding:10px 12px; "
+                    "margin-bottom:10px; background-color:{surface};'>"
+                    "<div style='font-size:12px; font-weight:700; color:{accent};'>{source_id}</div>"
+                    "<div style='font-size:11px; color:{muted}; margin:2px 0 6px 0;'>"
+                    "{filename} &middot; page {pages} &middot; chunk <code>{chunk_id}</code></div>"
+                    "<div style='font-size:12px; color:{text}; line-height:1.4;'>{excerpt}</div>"
+                    "</div>".format(
+                        border=Colors.border,
+                        surface=Colors.surface_alt,
+                        accent=Colors.accent,
+                        muted=Colors.text_muted,
+                        text=Colors.text,
+                        source_id=html.escape(citation.source_id),
+                        filename=html.escape(citation.filename),
+                        pages=html.escape(pages),
+                        chunk_id=html.escape(citation.chunk_id),
+                        excerpt=html.escape(citation.excerpt).replace("\n", "<br>"),
+                    )
+                )
+            self.citation_view.setHtml("".join(cards))
         self.refresh_status()

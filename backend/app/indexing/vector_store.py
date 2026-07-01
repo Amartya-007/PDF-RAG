@@ -25,6 +25,9 @@ class LocalVectorStore:
         self._vectors.update(vectors)
         self.save()
 
+    def existing_ids(self) -> set[str]:
+        return set(self._vectors.keys())
+
     def delete_missing(self, keep_ids: set[str]) -> None:
         self._vectors = {key: value for key, value in self._vectors.items() if key in keep_ids}
         self.save()

@@ -31,6 +31,7 @@ class Settings:
     embedding_batch_size: int
     use_ollama: bool
     allow_hash_embeddings: bool
+    force_ocr: bool
 
     @property
     def documents_dir(self) -> Path:
@@ -69,9 +70,10 @@ def get_settings() -> Settings:
         rerank_top_k=int(os.getenv("RAG_RERANK_TOP_K", "30")),
         final_context_chunks=int(os.getenv("RAG_FINAL_CONTEXT_CHUNKS", "8")),
         temperature=float(os.getenv("RAG_TEMPERATURE", "0.1")),
-        embedding_batch_size=int(os.getenv("RAG_EMBEDDING_BATCH_SIZE", "4")),
+        embedding_batch_size=int(os.getenv("RAG_EMBEDDING_BATCH_SIZE", "32")),
         use_ollama=_bool_env("RAG_USE_OLLAMA", False),
         allow_hash_embeddings=_bool_env("RAG_ALLOW_HASH_EMBEDDINGS", True),
+        force_ocr=_bool_env("RAG_FORCE_OCR", False),
     )
 
 
