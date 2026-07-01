@@ -1,212 +1,391 @@
-"""Visual theme for the desktop app.
+"""Dark design system — mirrors the reference UI screenshot.
 
-A single source of truth for colors and the QSS stylesheet, so the rest of
-the UI code never hardcodes hex values. Keeping this separate also makes it
-straightforward to add a dark theme later without touching main_window.py.
+Single source of truth for every color token and the global QSS stylesheet.
+Import Colors and STYLESHEET; never hardcode hex values elsewhere.
 """
-
 from __future__ import annotations
 
 
 class Colors:
-    bg = "#F6F7FB"
-    surface = "#FFFFFF"
-    surface_alt = "#F0F1F6"
-    border = "#E2E4EC"
-    text = "#1B1D29"
-    text_muted = "#6B7080"
-    text_faint = "#9498A6"
+    # ── Backgrounds ───────────────────────────────────────────────────
+    bg_base      = "#0f1117"   # outermost window
+    bg_sidebar   = "#161b27"   # left sidebar
+    bg_panel     = "#1a1f2e"   # main panels / cards
+    bg_card      = "#1e2437"   # citation cards, message bubbles
+    bg_input     = "#252d3d"   # text inputs
+    bg_hover     = "#242b3d"   # hover state
+    bg_selected  = "#2a3350"   # selected list item
 
-    accent = "#4F46E5"
-    accent_hover = "#4338CA"
-    accent_pressed = "#3730A3"
-    accent_soft = "#EEF0FE"
+    # ── Borders ───────────────────────────────────────────────────────
+    border       = "#2a3350"
+    border_light = "#323d58"
 
-    success = "#16A34A"
-    success_soft = "#E7F8EC"
-    warning = "#D97706"
-    warning_soft = "#FEF3E2"
-    danger = "#DC2626"
-    danger_soft = "#FDECEC"
+    # ── Text ──────────────────────────────────────────────────────────
+    text         = "#e2e8f0"
+    text_muted   = "#8892a4"
+    text_faint   = "#4a5568"
+    text_link    = "#7c9ef8"
 
-    user_bubble = "#4F46E5"
-    user_bubble_text = "#FFFFFF"
-    assistant_bubble = "#F0F1F6"
-    assistant_bubble_text = "#1B1D29"
+    # ── Accent (indigo) ───────────────────────────────────────────────
+    accent       = "#4f6ef7"
+    accent_hover = "#3b5bdb"
+    accent_soft  = "#1e2d5c"
+
+    # ── Semantic ──────────────────────────────────────────────────────
+    success      = "#34d399"
+    success_soft = "#0d2e22"
+    warning      = "#fbbf24"
+    warning_soft = "#2e2200"
+    danger       = "#f87171"
+    danger_soft  = "#2e0d0d"
+    info         = "#60a5fa"
+    info_soft    = "#0d1f3c"
+
+    # ── Relevance score chips ─────────────────────────────────────────
+    rel_high     = "#34d399"   # ≥ 0.90
+    rel_med      = "#fbbf24"   # ≥ 0.75
+    rel_low      = "#f87171"   # < 0.75
+
+    # ── Chat bubbles ──────────────────────────────────────────────────
+    user_bubble    = "#1e2d5c"
+    user_text      = "#c7d7fd"
+    assist_bubble  = "#1e2437"
+    assist_text    = "#e2e8f0"
 
 
 STYLESHEET = f"""
+/* ── Global ─────────────────────────────────────────────────────── */
 * {{
     font-family: "Segoe UI", "Inter", "Helvetica Neue", Arial, sans-serif;
     color: {Colors.text};
+    outline: none;
+}}
+QMainWindow, QWidget {{
+    background-color: {Colors.bg_base};
+}}
+QWidget#sidebar {{
+    background-color: {Colors.bg_sidebar};
+    border-right: 1px solid {Colors.border};
+}}
+QWidget#chatArea {{
+    background-color: {Colors.bg_panel};
+}}
+QWidget#sourcesPanel {{
+    background-color: {Colors.bg_sidebar};
+    border-left: 1px solid {Colors.border};
 }}
 
-QMainWindow, QWidget#root {{
-    background-color: {Colors.bg};
+/* ── Header bar ─────────────────────────────────────────────────── */
+QWidget#headerBar {{
+    background-color: {Colors.bg_sidebar};
+    border-bottom: 1px solid {Colors.border};
 }}
-
-QWidget {{
-    background-color: transparent;
-}}
-
-QLabel#appTitle {{
-    font-size: 17px;
+QLabel#appName {{
+    font-size: 14px;
     font-weight: 700;
     color: {Colors.text};
 }}
-
-QLabel#appSubtitle {{
+QLabel#appVersion {{
     font-size: 11px;
     color: {Colors.text_muted};
+    padding: 2px 7px;
+    background: {Colors.bg_card};
+    border-radius: 8px;
+    border: 1px solid {Colors.border_light};
+}}
+QLabel#statusPill {{
+    font-size: 11px;
+    font-weight: 600;
+    color: {Colors.success};
+    padding: 2px 8px;
+    background: {Colors.success_soft};
+    border-radius: 8px;
 }}
 
-QFrame#headerBar {{
-    background-color: {Colors.surface};
-    border-bottom: 1px solid {Colors.border};
-}}
-
-QFrame#panel {{
-    background-color: {Colors.surface};
-    border: 1px solid {Colors.border};
-    border-radius: 10px;
-}}
-
-QLabel#sectionTitle {{
-    font-size: 12px;
-    font-weight: 700;
-    color: {Colors.text_muted};
-    letter-spacing: 0.5px;
-    padding: 2px 2px 6px 2px;
-}}
-
+/* ── Buttons ────────────────────────────────────────────────────── */
 QPushButton {{
-    background-color: {Colors.surface};
-    border: 1px solid {Colors.border};
+    background-color: {Colors.bg_card};
+    border: 1px solid {Colors.border_light};
     border-radius: 8px;
     padding: 7px 14px;
     font-size: 12px;
     font-weight: 600;
     color: {Colors.text};
 }}
-
 QPushButton:hover {{
-    background-color: {Colors.surface_alt};
+    background-color: {Colors.bg_hover};
     border-color: {Colors.accent};
+    color: {Colors.text};
 }}
-
 QPushButton:pressed {{
     background-color: {Colors.accent_soft};
 }}
-
 QPushButton:disabled {{
     color: {Colors.text_faint};
-    background-color: {Colors.surface_alt};
 }}
-
-QPushButton#primaryButton {{
+QPushButton#primaryBtn {{
     background-color: {Colors.accent};
     border: 1px solid {Colors.accent};
     color: white;
+    font-size: 13px;
+    font-weight: 700;
+    border-radius: 9px;
+    padding: 9px 18px;
 }}
-
-QPushButton#primaryButton:hover {{
+QPushButton#primaryBtn:hover {{
     background-color: {Colors.accent_hover};
     border-color: {Colors.accent_hover};
 }}
-
-QPushButton#primaryButton:pressed {{
-    background-color: {Colors.accent_pressed};
+QPushButton#ghostBtn {{
+    background-color: transparent;
+    border: 1px solid {Colors.border_light};
+    color: {Colors.text_muted};
+    padding: 6px 12px;
+    font-size: 12px;
+}}
+QPushButton#ghostBtn:hover {{
+    background-color: {Colors.bg_hover};
+    color: {Colors.text};
+    border-color: {Colors.border_light};
+}}
+QPushButton#iconBtn {{
+    background-color: transparent;
+    border: none;
+    color: {Colors.text_muted};
+    padding: 4px;
+    font-size: 13px;
+}}
+QPushButton#iconBtn:hover {{
+    color: {Colors.text};
+    background-color: {Colors.bg_hover};
+    border-radius: 6px;
+}}
+QPushButton#sendBtn {{
+    background-color: {Colors.accent};
+    border: none;
+    border-radius: 10px;
+    padding: 10px 16px;
+    color: white;
+    font-size: 15px;
+    font-weight: 700;
+    min-width: 46px;
+    min-height: 46px;
+}}
+QPushButton#sendBtn:hover {{
+    background-color: {Colors.accent_hover};
 }}
 
-QListWidget {{
-    background-color: {Colors.surface};
+/* ── Search bar ─────────────────────────────────────────────────── */
+QLineEdit#searchBar {{
+    background-color: {Colors.bg_input};
+    border: 1px solid {Colors.border};
+    border-radius: 9px;
+    padding: 7px 14px;
+    font-size: 12px;
+    color: {Colors.text};
+    min-width: 240px;
+}}
+QLineEdit#searchBar:focus {{
+    border-color: {Colors.accent};
+}}
+QLineEdit#chatInput {{
+    background-color: transparent;
+    border: none;
+    font-size: 13px;
+    color: {Colors.text};
+    padding: 4px 0px;
+}}
+QLineEdit#chatInput::placeholder {{
+    color: {Colors.text_faint};
+}}
+
+/* ── Sidebar labels ─────────────────────────────────────────────── */
+QLabel#sectionLabel {{
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    color: {Colors.text_faint};
+    padding: 4px 0px 2px 0px;
+}}
+
+/* ── Workspace / document tree ──────────────────────────────────── */
+QTreeWidget {{
+    background-color: transparent;
     border: none;
     outline: none;
+    font-size: 12px;
+}}
+QTreeWidget::item {{
+    padding: 4px 4px;
+    border-radius: 6px;
+    color: {Colors.text_muted};
+}}
+QTreeWidget::item:hover {{
+    background-color: {Colors.bg_hover};
+    color: {Colors.text};
+}}
+QTreeWidget::item:selected {{
+    background-color: {Colors.bg_selected};
+    color: {Colors.text};
+}}
+QTreeWidget::branch {{
+    background-color: transparent;
 }}
 
-QListWidget::item {{
-    border: none;
-    padding: 0px;
-    margin: 2px 0px;
-}}
-
-QListWidget::item:selected {{
-    background-color: {Colors.accent_soft};
-    border-radius: 8px;
-}}
-
-QLineEdit {{
-    background-color: {Colors.surface};
+/* ── Stat cards ─────────────────────────────────────────────────── */
+QWidget#statCard {{
+    background-color: {Colors.bg_card};
     border: 1px solid {Colors.border};
     border-radius: 8px;
-    padding: 9px 12px;
-    font-size: 13px;
 }}
 
-QLineEdit:focus {{
-    border: 1px solid {Colors.accent};
-}}
-
-QTextBrowser, QPlainTextEdit {{
-    background-color: {Colors.surface};
+/* ── Chat view ──────────────────────────────────────────────────── */
+QTextBrowser {{
+    background-color: transparent;
     border: none;
     font-size: 13px;
+    line-height: 1.6;
+}}
+QWidget#chatInputBox {{
+    background-color: {Colors.bg_input};
+    border: 1px solid {Colors.border_light};
+    border-radius: 14px;
+}}
+QWidget#chatInputBox:focus-within {{
+    border-color: {Colors.accent};
 }}
 
-QSplitter::handle {{
-    background-color: {Colors.bg};
-    width: 10px;
-}}
-
-QProgressBar {{
-    background-color: {Colors.surface_alt};
-    border: none;
-    border-radius: 4px;
-    height: 8px;
-}}
-
-QProgressBar::chunk {{
-    background-color: {Colors.accent};
-    border-radius: 4px;
-}}
-
-QComboBox, QFormLayout QLineEdit {{
-    background-color: {Colors.surface};
+/* ── Sources panel ──────────────────────────────────────────────── */
+QWidget#citationCard {{
+    background-color: {Colors.bg_card};
     border: 1px solid {Colors.border};
+    border-radius: 10px;
+}}
+QWidget#citationCard:hover {{
+    border-color: {Colors.border_light};
+}}
+QWidget#primaryCitationCard {{
+    background-color: {Colors.bg_card};
+    border: 1.5px solid {Colors.accent};
+    border-radius: 10px;
+}}
+
+/* ── Combobox / Dropdown ────────────────────────────────────────── */
+QComboBox {{
+    background-color: {Colors.bg_card};
+    border: 1px solid {Colors.border_light};
     border-radius: 8px;
-    padding: 6px 10px;
+    padding: 5px 10px;
+    font-size: 11px;
+    color: {Colors.text_muted};
+    min-width: 130px;
+}}
+QComboBox::drop-down {{
+    border: none;
+    width: 20px;
+}}
+QComboBox QAbstractItemView {{
+    background-color: {Colors.bg_card};
+    border: 1px solid {Colors.border_light};
+    color: {Colors.text};
+    selection-background-color: {Colors.bg_selected};
 }}
 
-QDialog {{
-    background-color: {Colors.bg};
-}}
-
+/* ── Scroll bars ────────────────────────────────────────────────── */
 QScrollBar:vertical {{
     background: transparent;
-    width: 10px;
+    width: 6px;
+    margin: 0;
 }}
-
 QScrollBar::handle:vertical {{
-    background: {Colors.border};
-    border-radius: 5px;
-    min-height: 24px;
+    background: {Colors.border_light};
+    border-radius: 3px;
+    min-height: 20px;
 }}
-
 QScrollBar::handle:vertical:hover {{
     background: {Colors.text_faint};
 }}
-
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
     height: 0px;
+}}
+QScrollBar:horizontal {{
+    height: 0px;
+}}
+
+/* ── Splitter ───────────────────────────────────────────────────── */
+QSplitter::handle {{
+    background-color: {Colors.border};
+    width: 1px;
+}}
+
+/* ── Tooltips ───────────────────────────────────────────────────── */
+QToolTip {{
+    background-color: {Colors.bg_card};
+    color: {Colors.text};
+    border: 1px solid {Colors.border_light};
+    border-radius: 6px;
+    padding: 4px 8px;
+    font-size: 11px;
+}}
+
+/* ── Dialog ─────────────────────────────────────────────────────── */
+QDialog {{
+    background-color: {Colors.bg_panel};
+}}
+QFormLayout QLabel {{
+    color: {Colors.text_muted};
+    font-size: 12px;
+}}
+QCheckBox {{
+    color: {Colors.text};
+    font-size: 12px;
+    spacing: 8px;
+}}
+QCheckBox::indicator {{
+    width: 16px;
+    height: 16px;
+    border: 1px solid {Colors.border_light};
+    border-radius: 4px;
+    background: {Colors.bg_input};
+}}
+QCheckBox::indicator:checked {{
+    background: {Colors.accent};
+    border-color: {Colors.accent};
+}}
+QPlainTextEdit {{
+    background-color: {Colors.bg_input};
+    border: 1px solid {Colors.border};
+    border-radius: 8px;
+    color: {Colors.text};
+    font-family: "Consolas", "Courier New", monospace;
+    font-size: 11px;
+    padding: 8px;
+}}
+QProgressBar {{
+    background-color: {Colors.bg_card};
+    border: none;
+    border-radius: 3px;
+    height: 4px;
+}}
+QProgressBar::chunk {{
+    background-color: {Colors.accent};
+    border-radius: 3px;
 }}
 """
 
 
-def status_badge_style(status: str) -> tuple[str, str, str]:
-    """Returns (background, text_color, label) for a document status."""
-    mapping = {
-        "ready": (Colors.success_soft, Colors.success, "Ready"),
-        "processing": (Colors.warning_soft, Colors.warning, "Processing"),
-        "failed": (Colors.danger_soft, Colors.danger, "Failed"),
-    }
-    return mapping.get(status, (Colors.surface_alt, Colors.text_muted, status.title()))
+def relevance_color(score: float) -> str:
+    if score >= 0.90:
+        return Colors.rel_high
+    if score >= 0.75:
+        return Colors.rel_med
+    return Colors.rel_low
+
+
+def status_badge(status: str) -> tuple[str, str, str]:
+    """Returns (bg, fg, label) for document status."""
+    return {
+        "ready":      (Colors.success_soft, Colors.success, "●  Ready"),
+        "processing": (Colors.warning_soft, Colors.warning, "●  Processing"),
+        "failed":     (Colors.danger_soft,  Colors.danger,  "●  Failed"),
+    }.get(status, (Colors.bg_card, Colors.text_muted, status.title()))
