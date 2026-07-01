@@ -39,7 +39,7 @@ class RagService:
         self.store.ensure_session(DEFAULT_SESSION_ID, DEFAULT_SESSION_TITLE)
         self.store.ensure_session(self.session_id, DEFAULT_SESSION_TITLE if self.session_id == DEFAULT_SESSION_ID else self.session_id)
         self.store.mark_stale_processing_documents_failed()
-        self.parser = PdfParser()
+        self.parser = PdfParser(force_ocr=self.settings.force_ocr)
         self.chunker = Chunker()
         self.embedder = EmbeddingService(self.settings)
         self.vectors = LocalVectorStore(self.settings.indexes_dir / "vectors.json")
@@ -256,10 +256,18 @@ class RagService:
         self.store.close()
 
     def _index_chunks(self, chunks: list[Chunk]) -> None:
-        texts = [chunk.text for chunk in chunks]
+        # Only embed chunks we haven't already vectorized. chunk_id is content
+        # derived (stable_id over document + position + text hash upstream),
+        # so an existing id means the embedding is already correct -
+        # skipping it avoids paying Ollama/GPU cost twice for the same text.
+        existing = self.vectors.existing_ids()
+        new_chunks = [chunk for chunk in chunks if chunk.chunk_id not in existing]
+        if not new_chunks:
+            return
+        texts = [chunk.text for chunk in new_chunks]
         vectors = self.embedder.embed(texts)
         self.vectors.upsert_many(
-            {chunk.chunk_id: vector for chunk, vector in zip(chunks, vectors)}
+            {chunk.chunk_id: vector for chunk, vector in zip(new_chunks, vectors)}
         )
 
     def _rebuild_indexes(self) -> None:
@@ -273,12 +281,24 @@ class RagService:
         self.sparse.build(self.store.list_chunks())
 
     def _rebuild_okf_indexes(self) -> None:
+        # Same logic as _index_chunks: concept_id (and therefore chunk_id
+        # "okf:{concept_id}") is derived from the concept's source chunk ids,
+        # so an unchanged concept already has a valid, reusable embedding.
+        # Without this skip, every single document ingest re-embedded EVERY
+        # OKF concept ever generated - an O(n^2) cost across a growing
+        # library that dominated ingestion time once you had more than a
+        # handful of documents.
         concept_chunks = self._concept_chunks(self.store.list_concepts())
-        if concept_chunks:
-            vectors = self.embedder.embed([chunk.text for chunk in concept_chunks])
+        existing = self.okf_vectors.existing_ids()
+        new_concept_chunks = [c for c in concept_chunks if c.chunk_id not in existing]
+        if new_concept_chunks:
+            vectors = self.embedder.embed([chunk.text for chunk in new_concept_chunks])
             self.okf_vectors.upsert_many(
-                {chunk.chunk_id: vector for chunk, vector in zip(concept_chunks, vectors)}
+                {chunk.chunk_id: vector for chunk, vector in zip(new_concept_chunks, vectors)}
             )
+        # Prune embeddings for concepts that were regenerated/removed so the
+        # vector store doesn't grow unbounded with stale entries.
+        self.okf_vectors.delete_missing({chunk.chunk_id for chunk in concept_chunks})
         self.okf_sparse.build(concept_chunks)
 
     def _retrieve_okf_sources(

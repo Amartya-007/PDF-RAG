@@ -12,6 +12,9 @@ class ParseError(RuntimeError):
 
 
 class PdfParser:
+    def __init__(self, force_ocr: bool = False) -> None:
+        self.force_ocr = force_ocr
+
     def parse(self, path: Path) -> list[PageText]:
         suffix = path.suffix.lower()
         if suffix in {".txt", ".md"}:
@@ -21,12 +24,29 @@ class PdfParser:
         return self._parse_pdf(path)
 
     def _parse_pdf(self, path: Path) -> list[PageText]:
+        if self.force_ocr:
+            docling_pages = self._try_docling(path)
+            if docling_pages:
+                return docling_pages
+
+        # PyMuPDF first: it is 5-20x faster than Docling for normal, born-digital
+        # PDFs because it just reads the embedded text layer instead of running
+        # layout analysis / OCR models. Docling is only worth its cost on
+        # scanned or image-only PDFs where there is no text layer to read.
+        pymupdf_pages = self._try_pymupdf(path)
+        if pymupdf_pages and self._has_sufficient_text(pymupdf_pages):
+            return pymupdf_pages
+
+        # Fall back to Docling for scanned/complex PDFs (it can OCR), or if
+        # PyMuPDF isn't installed at all.
         docling_pages = self._try_docling(path)
         if docling_pages:
             return docling_pages
 
-        pymupdf_pages = self._try_pymupdf(path)
         if pymupdf_pages:
+            # PyMuPDF got *some* text but it looked too sparse, and Docling
+            # wasn't available/usable. Better to return what we have than
+            # fail outright.
             return pymupdf_pages
 
         raise ParseError(
@@ -34,6 +54,17 @@ class PdfParser:
             "If this is a scanned/image-only PDF, install Docling/OCR support with "
             "`py -m pip install -e .[pdf]` or import a text-searchable PDF."
         )
+
+    @staticmethod
+    def _has_sufficient_text(pages: list[PageText], min_chars_per_page: int = 20) -> bool:
+        """Heuristic: does this look like a real digital text layer, or just
+        sparse noise (page numbers, headers) from a scanned PDF that PyMuPDF
+        partially picked up? If sparse, prefer Docling's OCR path instead."""
+        if not pages:
+            return False
+        total_chars = sum(len(page.text.strip()) for page in pages)
+        avg_chars = total_chars / len(pages)
+        return avg_chars >= min_chars_per_page
 
     def _try_docling(self, path: Path) -> list[PageText]:
         try:

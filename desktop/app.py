@@ -23,6 +23,7 @@ def main() -> int:
     from desktop.controller import DesktopController
     from desktop.main_window import MainWindow
     from desktop.preferences import apply_preferences, load_preferences
+    from desktop.theme import STYLESHEET
 
     data_dir = configure_desktop_environment()
     apply_preferences(load_preferences())
@@ -33,6 +34,7 @@ def main() -> int:
     logging.getLogger(__name__).info("OKF markdown dir: %s", data_dir / "knowledge")
     app = QApplication(sys.argv)
     app.setApplicationName("Local PDF RAG")
+    app.setStyleSheet(STYLESHEET)
     controller = DesktopController()
     window = MainWindow(controller)
     window.resize(1280, 780)
