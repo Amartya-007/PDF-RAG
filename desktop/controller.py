@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from backend.app.core.config import Settings, get_settings
-from backend.app.models import Answer, Chunk, Document
+from backend.app.models import Answer, ChatSession, Chunk, Document
 from backend.app.rag_service import RagService
 from desktop.model_readiness import ModelReadiness, ModelReadinessChecker
 from desktop.preferences import DesktopPreferences, apply_preferences, save_preferences
@@ -23,12 +23,13 @@ class DesktopController:
         self.readiness_checker = readiness_checker or ModelReadinessChecker()
 
     def status(self) -> dict[str, Any]:
-        documents = self.service.store.list_documents()
-        chunks = self.service.store.list_chunks()
+        documents = self.service.store.list_documents(self.service.session_id)
+        chunks = self.service.store.list_chunks(self.service.session_id)
         concepts = self.service.store.list_concepts()
         readiness = self.model_readiness()
         return {
             "data_dir": str(self.settings.data_dir),
+            "session_id": self.service.session_id,
             "documents": len(documents),
             "chunks": len(chunks),
             "concepts": len(concepts),
@@ -36,8 +37,20 @@ class DesktopController:
             "ollama_message": readiness.message,
         }
 
+    def list_sessions(self) -> list[ChatSession]:
+        return self.service.list_sessions()
+
+    def active_session_id(self) -> str:
+        return self.service.session_id
+
+    def set_active_session(self, session_id: str) -> None:
+        self.service.set_session(session_id)
+
+    def create_session(self, title: str | None = None) -> ChatSession:
+        return self.service.create_session(title)
+
     def list_documents(self) -> list[Document]:
-        return self.service.store.list_documents()
+        return self.service.store.list_documents(self.service.session_id)
 
     def ingest(self, path: str | Path, build_okf: bool = True) -> Document:
         return self.service.ingest(Path(path), build_okf=build_okf)
@@ -82,9 +95,10 @@ class DesktopController:
         )
         save_preferences(preferences)
         apply_preferences(preferences)
+        session_id = self.service.session_id
         self.service.close()
         self.settings = get_settings()
-        self.service = RagService(self.settings)
+        self.service = RagService(self.settings, session_id)
 
     def close(self) -> None:
         self.service.close()

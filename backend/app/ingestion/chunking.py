@@ -56,6 +56,7 @@ class Chunker:
             chunk_type="paragraph",
             parent_chunk_id=parent_id,
             metadata={"word_count": len(tokenize(text))},
+            session_id=document.session_id,
         )
 
     def _overlap(self, paragraphs: list[str]) -> list[str]:

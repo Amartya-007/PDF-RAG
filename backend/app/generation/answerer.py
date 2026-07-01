@@ -36,6 +36,16 @@ class Answerer:
                 debug=debug or {},
             )
 
+        definition_answer = self._extractive_definition_answer(question, chunks, citations)
+        if definition_answer:
+            return Answer(
+                question=question,
+                answer=definition_answer,
+                citations=citations,
+                answerable=True,
+                debug=debug or {},
+            )
+
         if self.settings.use_ollama:
             try:
                 generated = self.ollama.generate(build_answer_prompt(question, evidence))
@@ -66,9 +76,14 @@ class Answerer:
         citations: list[Citation],
     ) -> str | None:
         normalized = question.lower()
-        if any(term in normalized for term in ["full name", "person name", "user name", "candidate name"]):
+        if any(
+            term in normalized
+            for term in ["full name", "person name", "user name", "candidate name", "student name"]
+        ):
             return self._answer_name(question, chunks, citations)
         if "name" in normalized and any(term in normalized for term in ["resume", "cv", "person", "candidate"]):
+            return self._answer_name(question, chunks, citations)
+        if normalized.strip() in {"name", "what is name", "what is the name"}:
             return self._answer_name(question, chunks, citations)
         if "cgpa" in normalized or "gpa" in normalized:
             return self._answer_pattern(
@@ -98,11 +113,120 @@ class Answerer:
             )
         return None
 
+    def _extractive_definition_answer(
+        self,
+        question: str,
+        chunks: list[Chunk],
+        citations: list[Citation],
+    ) -> str | None:
+        normalized = self._normalize_question(question)
+        if not self._is_definition_query(normalized):
+            return None
+
+        query_terms = self._definition_terms(normalized)
+        if not query_terms:
+            return None
+
+        detailed = self._is_detailed_query(normalized)
+        phrase = self._definition_phrase(normalized)
+        if detailed:
+            passage = self._best_topic_passage(chunks, citations, query_terms, phrase)
+            if passage:
+                return passage
+
+        best: tuple[int, str, Citation] | None = None
+        for citation, chunk in zip(citations, chunks):
+            sentences = self._sentences(chunk.text)
+            if not sentences:
+                continue
+            for sentence in sentences:
+                sentence_terms = set(re.findall(r"[a-z0-9]+", self._normalize_question(sentence)))
+                score = sum(1 for term in query_terms if term in sentence_terms)
+                if score and (best is None or score > best[0]):
+                    best = (score, sentence, citation)
+
+        if best is None:
+            return None
+
+        _score, sentence, citation = best
+        sentence = truncate_words(sentence, 70).strip(" -")
+        return f"{sentence} [{citation.source_id}]"
+
+    def _is_definition_query(self, normalized_question: str) -> bool:
+        return bool(
+            re.search(
+                r"\b(what is|what are|define|explain|describe|"
+                r"tell me(?: everything| all)? about|everything about)\b",
+                normalized_question,
+            )
+            or "in detail" in normalized_question
+            or "details about" in normalized_question
+        )
+
+    def _is_detailed_query(self, normalized_question: str) -> bool:
+        return any(
+            term in normalized_question
+            for term in ["everything", "all about", "in detail", "details about"]
+        )
+
+    def _best_topic_passage(
+        self,
+        chunks: list[Chunk],
+        citations: list[Citation],
+        query_terms: list[str],
+        phrase: str,
+    ) -> str | None:
+        best: tuple[float, str, Citation] | None = None
+        for citation, chunk in zip(citations, chunks):
+            excerpt = self._topic_excerpt(chunk.text, phrase)
+            if not excerpt:
+                continue
+            score = self._passage_score(excerpt, query_terms, phrase)
+            if score and (best is None or score > best[0]):
+                best = (score, excerpt, citation)
+
+        if best is None:
+            return None
+
+        _score, excerpt, citation = best
+        excerpt = truncate_words(excerpt, 170).strip(" -")
+        return f"{excerpt} [{citation.source_id}]"
+
+    def _topic_excerpt(self, text: str, phrase: str) -> str:
+        normalized_text = self._normalize_question(text)
+        position = normalized_text.find(phrase) if phrase else -1
+        if position < 0:
+            sentences = self._sentences(text)
+            return " ".join(sentences[:4])
+
+        word_starts = [match.start() for match in re.finditer(r"\S+", text)]
+        start_word = 0
+        for index, start in enumerate(word_starts):
+            if start >= position:
+                start_word = index
+                break
+        words = text.split()
+        start_word = max(0, start_word - 4)
+        return " ".join(words[start_word : start_word + 190])
+
+    def _passage_score(self, passage: str, query_terms: list[str], phrase: str) -> float:
+        normalized = self._normalize_question(passage)
+        score = 0.0
+        if phrase and phrase in normalized:
+            score += 20.0
+        passage_terms = set(re.findall(r"[a-z0-9]+", normalized))
+        score += sum(2.0 for term in query_terms if term in passage_terms)
+        if "transaction" in query_terms and "states" in query_terms:
+            state_terms = ["active", "partially", "failed", "aborted", "committed", "terminated"]
+            score += sum(3.0 for term in state_terms if term in normalized)
+        return score
+
     def _answer_name(self, question: str, chunks: list[Chunk], citations: list[Citation]) -> str | None:
         target_names = [
             token
             for token in re.findall(r"[a-z][a-z]+", question.lower())
-            if token not in {"what", "whats", "name", "full", "person", "user", "candidate", "resume"}
+            if token
+            not in {"what", "whats", "the", "is", "name", "full", "person", "user", "candidate", "student", "resume"}
         ]
         for citation, chunk in zip(citations, chunks):
             text = chunk.text
@@ -124,7 +248,7 @@ class Answerer:
                 return f"The full name is {self._title_case_name(label_match.group(1))}. [{citation.source_id}]"
 
             first_line = next((line.strip() for line in text.splitlines() if line.strip()), "")
-            line_match = re.search(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,2})\b", first_line)
+            line_match = re.search(r"\b([A-Z][a-z]+\s+[A-Z][a-z]+)\b", first_line)
             if line_match:
                 return f"The full name is {self._title_case_name(line_match.group(1))}. [{citation.source_id}]"
         return None
@@ -182,11 +306,7 @@ class Answerer:
         return INSUFFICIENT_EVIDENCE
 
     def _best_sentence(self, text: str, citation: Citation) -> str | None:
-        sentences = [
-            sentence.strip()
-            for sentence in re.split(r"(?<=[.!?])\s+|\n+", text)
-            if sentence.strip()
-        ]
+        sentences = self._sentences(text)
         if not sentences:
             return None
         return f"{truncate_words(sentences[0], 45)} [{citation.source_id}]"
@@ -230,3 +350,32 @@ class Answerer:
             "mba": "MBA",
         }
         return mapping.get(normalized, value)
+
+    def _normalize_question(self, value: str) -> str:
+        normalized = value.lower()
+        return normalized.replace("transection", "transaction").replace("collage", "college")
+
+    def _definition_terms(self, normalized_question: str) -> list[str]:
+        cleaned = re.sub(
+            r"\b(what|is|are|the|a|an|define|explain|describe|tell|me|"
+            r"everything|all|about|of|in|detail|details|please|also)\b",
+            " ",
+            normalized_question,
+        )
+        terms = [term for term in re.findall(r"[a-z0-9]+", cleaned) if len(term) > 2]
+        if "transaction" in terms:
+            terms.extend(["transactions", "transactional"])
+        return terms
+
+    def _definition_phrase(self, normalized_question: str) -> str:
+        cleaned = re.sub(
+            r"\b(what|is|are|the|a|an|define|explain|describe|tell|me|"
+            r"everything|all|about|of|in|detail|details|please|also)\b",
+            " ",
+            normalized_question,
+        )
+        return " ".join(re.findall(r"[a-z0-9]+", cleaned))
+
+    def _sentences(self, text: str) -> list[str]:
+        parts = re.split(r"(?<=[.!?])\s+|\n+|(?<=:)\s+", text)
+        return [" ".join(part.split()) for part in parts if part.strip()]

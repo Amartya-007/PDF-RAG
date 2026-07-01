@@ -4,12 +4,20 @@ from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True)
+class ChatSession:
+    session_id: str
+    title: str
+    created_at: str = ""
+
+
+@dataclass(frozen=True)
 class Document:
     document_id: str
     filename: str
     sha256: str
     path: str
     status: str = "ready"
+    session_id: str = "default"
 
 
 @dataclass(frozen=True)
@@ -32,6 +40,7 @@ class Chunk:
     chunk_type: str = "paragraph"
     parent_chunk_id: str | None = None
     metadata: dict[str, str | int | float | None] = field(default_factory=dict)
+    session_id: str = "default"
 
 
 @dataclass(frozen=True)

@@ -5,7 +5,11 @@ import sqlite3
 from pathlib import Path
 
 from backend.app.knowledge.okf import OkfConcept
-from backend.app.models import Chunk, Document
+from backend.app.models import ChatSession, Chunk, Document
+
+
+DEFAULT_SESSION_ID = "default"
+DEFAULT_SESSION_TITLE = "Legacy Chat"
 
 
 class MetadataStore:
@@ -40,17 +44,25 @@ class MetadataStore:
         with self.connect() as conn:
             conn.executescript(
                 """
+                create table if not exists sessions (
+                    session_id text primary key,
+                    title text not null,
+                    created_at text not null default current_timestamp
+                );
+
                 create table if not exists documents (
                     document_id text primary key,
                     filename text not null,
-                    sha256 text not null unique,
+                    sha256 text not null,
                     path text not null,
                     status text not null,
+                    session_id text not null default 'default',
                     created_at text not null default current_timestamp
                 );
 
                 create table if not exists chunks (
                     chunk_id text primary key,
+                    session_id text not null default 'default',
                     document_id text not null,
                     filename text not null,
                     page_start integer not null,
@@ -79,19 +91,55 @@ class MetadataStore:
                 );
                 """
             )
+            self._migrate_documents_sha_unique(conn)
+            self._ensure_session_columns(conn)
             self._ensure_concept_columns(conn)
+
+    def ensure_session(self, session_id: str, title: str) -> ChatSession:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                insert into sessions(session_id, title)
+                values(?, ?)
+                on conflict(session_id) do update set title=excluded.title
+                """,
+                (session_id, title),
+            )
+            row = conn.execute(
+                "select * from sessions where session_id = ?",
+                (session_id,),
+            ).fetchone()
+        return self._session_from_row(row)
+
+    def create_session(self, session_id: str, title: str) -> ChatSession:
+        with self.connect() as conn:
+            conn.execute(
+                "insert into sessions(session_id, title) values(?, ?)",
+                (session_id, title),
+            )
+            row = conn.execute(
+                "select * from sessions where session_id = ?",
+                (session_id,),
+            ).fetchone()
+        return self._session_from_row(row)
+
+    def list_sessions(self) -> list[ChatSession]:
+        with self.connect() as conn:
+            rows = conn.execute("select * from sessions order by created_at desc").fetchall()
+        return [self._session_from_row(row) for row in rows]
 
     def upsert_document(self, document: Document) -> None:
         with self.connect() as conn:
             conn.execute(
                 """
-                insert into documents(document_id, filename, sha256, path, status)
-                values(?, ?, ?, ?, ?)
+                insert into documents(document_id, filename, sha256, path, status, session_id)
+                values(?, ?, ?, ?, ?, ?)
                 on conflict(document_id) do update set
                     filename=excluded.filename,
                     sha256=excluded.sha256,
                     path=excluded.path,
-                    status=excluded.status
+                    status=excluded.status,
+                    session_id=excluded.session_id
                 """,
                 (
                     document.document_id,
@@ -99,12 +147,19 @@ class MetadataStore:
                     document.sha256,
                     document.path,
                     document.status,
+                    document.session_id,
                 ),
             )
 
-    def find_document_by_hash(self, sha256: str) -> Document | None:
+    def find_document_by_hash(self, sha256: str, session_id: str | None = None) -> Document | None:
         with self.connect() as conn:
-            row = conn.execute("select * from documents where sha256 = ?", (sha256,)).fetchone()
+            if session_id is None:
+                row = conn.execute("select * from documents where sha256 = ?", (sha256,)).fetchone()
+            else:
+                row = conn.execute(
+                    "select * from documents where sha256 = ? and session_id = ?",
+                    (sha256, session_id),
+                ).fetchone()
         return self._document_from_row(row) if row else None
 
     def update_document_status(self, document_id: str, status: str) -> None:
@@ -114,9 +169,15 @@ class MetadataStore:
                 (status, document_id),
             )
 
-    def list_documents(self) -> list[Document]:
+    def list_documents(self, session_id: str | None = None) -> list[Document]:
         with self.connect() as conn:
-            rows = conn.execute("select * from documents order by created_at desc").fetchall()
+            if session_id is None:
+                rows = conn.execute("select * from documents order by created_at desc").fetchall()
+            else:
+                rows = conn.execute(
+                    "select * from documents where session_id = ? order by created_at desc",
+                    (session_id,),
+                ).fetchall()
         return [self._document_from_row(row) for row in rows]
 
     def count_chunks_for_document(self, document_id: str) -> int:
@@ -152,14 +213,15 @@ class MetadataStore:
             conn.executemany(
                 """
                 insert into chunks(
-                    chunk_id, document_id, filename, page_start, page_end, section_path,
+                    chunk_id, session_id, document_id, filename, page_start, page_end, section_path,
                     text, chunk_type, parent_chunk_id, metadata
                 )
-                values(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                values(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     (
                         chunk.chunk_id,
+                        chunk.session_id,
                         chunk.document_id,
                         chunk.filename,
                         chunk.page_start,
@@ -174,9 +236,15 @@ class MetadataStore:
                 ],
             )
 
-    def list_chunks(self) -> list[Chunk]:
+    def list_chunks(self, session_id: str | None = None) -> list[Chunk]:
         with self.connect() as conn:
-            rows = conn.execute("select * from chunks").fetchall()
+            if session_id is None:
+                rows = conn.execute("select * from chunks").fetchall()
+            else:
+                rows = conn.execute(
+                    "select * from chunks where session_id = ?",
+                    (session_id,),
+                ).fetchall()
         return [self._chunk_from_row(row) for row in rows]
 
     def chunks_by_ids(self, chunk_ids: list[str]) -> list[Chunk]:
@@ -276,6 +344,60 @@ class MetadataStore:
             if column not in columns:
                 conn.execute(statement)
 
+    def _ensure_session_columns(self, conn: sqlite3.Connection) -> None:
+        document_columns = {
+            row["name"]
+            for row in conn.execute("pragma table_info(documents)").fetchall()
+        }
+        if "session_id" not in document_columns:
+            conn.execute(
+                "alter table documents add column session_id text not null default 'default'"
+            )
+
+        chunk_columns = {
+            row["name"]
+            for row in conn.execute("pragma table_info(chunks)").fetchall()
+        }
+        if "session_id" not in chunk_columns:
+            conn.execute("alter table chunks add column session_id text not null default 'default'")
+        conn.execute(
+            "insert or ignore into sessions(session_id, title) values(?, ?)",
+            (DEFAULT_SESSION_ID, DEFAULT_SESSION_TITLE),
+        )
+
+    def _migrate_documents_sha_unique(self, conn: sqlite3.Connection) -> None:
+        row = conn.execute(
+            "select sql from sqlite_master where type = 'table' and name = 'documents'"
+        ).fetchone()
+        sql = (row["sql"] if row else "").lower()
+        if "sha256 text not null unique" not in sql:
+            return
+        conn.executescript(
+            """
+            create table documents_new (
+                document_id text primary key,
+                filename text not null,
+                sha256 text not null,
+                path text not null,
+                status text not null,
+                session_id text not null default 'default',
+                created_at text not null default current_timestamp
+            );
+            insert into documents_new(document_id, filename, sha256, path, status, session_id, created_at)
+            select document_id, filename, sha256, path, status, 'default', created_at from documents;
+            drop table documents;
+            alter table documents_new rename to documents;
+            """
+        )
+
+    @staticmethod
+    def _session_from_row(row: sqlite3.Row) -> ChatSession:
+        return ChatSession(
+            session_id=row["session_id"],
+            title=row["title"],
+            created_at=row["created_at"],
+        )
+
     @staticmethod
     def _document_from_row(row: sqlite3.Row) -> Document:
         return Document(
@@ -284,6 +406,7 @@ class MetadataStore:
             sha256=row["sha256"],
             path=row["path"],
             status=row["status"],
+            session_id=row["session_id"] if "session_id" in row.keys() else DEFAULT_SESSION_ID,
         )
 
     @staticmethod
@@ -299,6 +422,7 @@ class MetadataStore:
             chunk_type=row["chunk_type"],
             parent_chunk_id=row["parent_chunk_id"],
             metadata=json.loads(row["metadata"]),
+            session_id=row["session_id"] if "session_id" in row.keys() else DEFAULT_SESSION_ID,
         )
 
     @staticmethod

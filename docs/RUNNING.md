@@ -23,13 +23,16 @@ Use the app like this:
 
 1. Click `Settings`.
 2. Confirm Ollama status and selected models.
-3. Click `Import PDFs / Text`.
-4. Select one or more PDF or text files.
-5. Wait until the documents show `[ready]`.
-6. Ask a question in the chat box.
-7. Check the right-side citations panel for source filename, page, chunk ID, and excerpt.
+3. Choose a chat/project from the left panel, or click `New Chat`.
+4. Click `Import PDFs / Text`.
+5. Select one or more PDF or text files.
+6. Wait until the documents show `[ready]`.
+7. Ask a question in the chat box.
+8. Check the right-side citations panel for source filename, page, chunk ID, and excerpt.
 
 If a previous import is stuck or failed, click `Repair Stuck Imports`.
+
+Old uploads are kept in `Legacy Chat`. New chats start with an empty document list and only search PDFs imported into that chat.
 
 ## 2. Run From Source
 
@@ -41,6 +44,8 @@ py --version
 py -m pip install -e .[desktop]
 py -m desktop.app
 ```
+
+This is the best way to debug. The terminal prints ingestion, parsing, chunking, indexing, retrieval, and answer timing logs.
 
 If PowerShell complains about the `[desktop]` extra, wrap it in quotes:
 
@@ -97,6 +102,16 @@ C:\Users\Windows 11\AppData\Local\Local PDF RAG\data
 ```
 
 This includes imported PDFs, SQLite metadata, local indexes, generated OKF Markdown, settings, and logs.
+
+Generated files are stored here:
+
+```text
+PDF copies:       C:\Users\Windows 11\AppData\Local\Local PDF RAG\data\documents
+Vector index:     C:\Users\Windows 11\AppData\Local\Local PDF RAG\data\indexes\vectors.json
+BM25 index:       C:\Users\Windows 11\AppData\Local\Local PDF RAG\data\indexes\bm25.json
+OKF Markdown:     C:\Users\Windows 11\AppData\Local\Local PDF RAG\data\knowledge\concepts
+SQLite metadata:  C:\Users\Windows 11\AppData\Local\Local PDF RAG\data\metadata.sqlite3
+```
 
 ## 5. Developer Commands
 
