@@ -1,126 +1,281 @@
 # Local PDF RAG
 
-Source-grounded local RAG for PDF collections, with an optional OKF knowledge layer.
+**Offline document Q&A with source citations — runs entirely on your machine.**
 
-This repository starts with a runnable Python backend core and a Windows-first offline desktop shell. It can ingest documents, chunk extracted text, build a local hybrid search index, retrieve cited evidence, and produce either an Ollama-generated answer or a conservative extractive fallback.
+Local PDF RAG is a fully private, GPU-accelerated RAG system for querying PDF collections. It ingests documents, builds a local hybrid search index, and answers questions by citing the exact page and chunk the answer came from. No cloud API, no internet required during normal use.
 
-The heavier production components from the proposal are intentionally integration points:
+---
 
-- Docling for high-quality PDF parsing and OCR
-- Qdrant for persistent vector/hybrid search
-- Ollama for local embeddings and answer generation
-- Qwen3 reranker through `sentence-transformers`
-- FastAPI for the HTTP API
-- PySide6 for the offline desktop product UI
+## Screenshots
+
+The desktop app features a three-panel layout: document library on the left, chat in the centre, and source citations on the right.
+
+> After launching, import a PDF → type a question → see the answer with cited source excerpts appear in real time.
+
+---
+
+## Hardware Target
+
+| Component | Spec |
+|-----------|------|
+| RAM | 24 GB DDR5 |
+| GPU | NVIDIA RTX 3050 · 4 GB VRAM |
+| Storage | 100 GB free (Gen 5 SSD) |
+| OS | Windows 11 (primary) · Linux supported |
+
+Everything runs locally via [Ollama](https://ollama.com). No paid API keys needed.
+
+---
+
+## Model Stack
+
+| Role | Model | Why |
+|------|-------|-----|
+| Answer generation | `qwen3.5:9b` | Best quality within 4 GB VRAM |
+| Fast / fallback generation | `qwen3.5:4b` | Half the VRAM, usable for dev |
+| Dense embeddings | `qwen3-embedding:4b` | Matches generation model family |
+| Reranking | `Qwen/Qwen3-Reranker-0.6B` | Lightweight cross-encoder via sentence-transformers |
+| Sparse retrieval | BM25 (built-in) | No extra service needed |
+| PDF parsing | PyMuPDF → Docling fallback | Fast path first, OCR fallback for scanned PDFs |
+
+---
 
 ## Quick Start
 
-```powershell
-py -m backend.app.cli init
-py -m backend.app.cli ingest .\some-document.pdf
-py -m backend.app.cli ask "What does this document say about leave limits?"
-```
-
-## Desktop App
-
-The main product direction is now a fully offline PySide6 desktop app. It calls the Python RAG service in-process and does not require a hosted server, Next.js, React, or internet during normal use.
+### 1 · Install Ollama and pull models
 
 ```powershell
-py -m pip install -e .[desktop]
-py -m desktop.app
-```
-
-The desktop app includes:
-
-- document library and local import
-- chat over ingested documents
-- source citations and excerpts
-- offline settings and Ollama/model readiness checks
-- background worker threads for ingestion and answering
-- installed Ollama model selection for answer and embedding models
-- local PDF parsing through PyMuPDF
-
-Windows executable packaging:
-
-```powershell
-pyinstaller desktop/packaging/local_pdf_rag_desktop.spec
-```
-
-If your first files are PDFs and you have not installed a PDF parser yet, install the optional backend dependencies:
-
-```powershell
-py -m pip install -e .[backend]
-```
-
-For local generation and embeddings, install Ollama and pull the models from `Model-to-use-instructions.md`:
-
-```powershell
+# https://ollama.com — install the Windows app, then:
 ollama pull qwen3.5:9b
-ollama pull qwen3.5:4b
 ollama pull qwen3-embedding:4b
 ```
 
-Then set `RAG_USE_OLLAMA=1` in your environment or copy `.env.example` into your preferred launcher.
+### 2 · Install the desktop app
 
-## Development Commands
+```powershell
+git clone https://github.com/Amartya-007/PDF-RAG.git
+cd PDF-RAG
+py -m pip install -e .[desktop]
+```
+
+### 3 · Run
+
+```powershell
+# Enable Ollama and launch the desktop app
+$env:RAG_USE_OLLAMA = "1"
+py -m desktop.app
+```
+
+Or copy `.env.example` and set `RAG_USE_OLLAMA=1` in it before launching.
+
+---
+
+## CLI Usage
+
+The CLI is useful for scripting, batch ingestion, and debugging retrieval without the GUI.
+
+```powershell
+# Initialise the local data store
+py -m backend.app.cli init
+
+# Ingest one or more documents
+py -m backend.app.cli ingest .\report.pdf
+py -m backend.app.cli ingest .\notes.txt
+
+# Ask a question
+py -m backend.app.cli ask "What are the annual leave rules?"
+
+# Check system status (documents, chunks, Ollama readiness)
+py -m backend.app.cli status
+
+# Debug retrieval — shows ranked chunks before the answer is generated
+py -m backend.app.cli retrieve "sick leave policy" --debug
+```
+
+---
+
+## Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `RAG_USE_OLLAMA` | `0` | Set to `1` to enable Ollama for generation and embeddings |
+| `RAG_OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama server URL |
+| `RAG_ACTIVE_MODEL` | `qwen3.5:9b` | Generation model name |
+| `RAG_EMBEDDING_MODEL` | `qwen3-embedding:4b` | Embedding model name |
+| `RAG_EMBEDDING_BATCH_SIZE` | `32` | Chunks per Ollama embedding request (tune for VRAM) |
+| `RAG_DATA_DIR` | `backend/data` | Where documents, indexes, and SQLite live |
+| `RAG_FORCE_OCR` | `0` | Set to `1` to always use Docling/OCR (for scanned PDFs) |
+| `RAG_ALLOW_HASH_EMBEDDINGS` | `1` | Fallback to deterministic hash embeddings when Ollama is off |
+
+---
+
+## Installing Optional Extras
+
+```powershell
+# PDF parsing extras (Docling for OCR / scanned PDFs)
+py -m pip install -e .[pdf]
+
+# FastAPI + Uvicorn HTTP server
+py -m pip install -e .[backend]
+py -m uvicorn backend.app.api.main:app --reload
+
+# Reranker (Qwen3-Reranker via sentence-transformers)
+py -m pip install -e .[reranker]
+```
+
+---
+
+## Build a Windows Executable
+
+```powershell
+py -m pip install -e .[desktop]
+pyinstaller desktop/packaging/local_pdf_rag_desktop.spec
+# Output: dist/LocalPDFRAG/LocalPDFRAG.exe
+```
+
+---
+
+## How It Works
+
+```
+PDF / TXT / MD
+     │
+     ▼
+ PdfParser
+ ├─ PyMuPDF  ← used first for born-digital PDFs (fast)
+ └─ Docling  ← fallback for scanned / image-only PDFs (OCR)
+     │
+     ▼
+ Chunker  →  text chunks with page + metadata
+     │
+     ├──► Dense index   (Ollama qwen3-embedding, batched)
+     ├──► Sparse index  (BM25)
+     └──► OKF generator (concept mindmap, incremental)
+               │
+               ▼
+         Question
+               │
+    ┌──────────┴──────────┐
+    │                     │
+Dense retrieval    Sparse retrieval
+    │                     │
+    └──────────┬──────────┘
+               │
+        OKF concept expansion
+               │
+        Reciprocal Rank Fusion
+               │
+           Reranker
+               │
+        Context assembly
+               │
+      Ollama qwen3.5:9b
+               │
+          Answer + Citations
+         (filename · page · chunk)
+```
+
+### OKF Knowledge Layer
+
+The OKF (Open Knowledge Format) layer generates a portable Markdown mindmap from each ingested document. Each concept is a `.md` file with YAML frontmatter containing:
+
+- `id`, `title`, `slug` — stable identifiers
+- `related` — slugs of other concepts linked by sentence-level co-occurrence
+- `source_chunk_ids` — the exact chunk IDs this concept was extracted from
+- `tags`, `aliases`, `verification_status`
+
+**How concepts are extracted (v2):**
+
+1. Tokenise each chunk into sentences (not the whole chunk at once).
+2. Extract 1-3 word n-grams within sentence boundaries, filtering stopwords at start/end.
+3. Score candidates by distinct-sentence coverage × length bonus — multi-word phrases that repeat across many sentences score highest.
+4. Deduplicate: greedily drop candidates that are substrings of higher-ranked ones.
+5. Compute relations via Jaccard similarity on sentence-level co-occurrence key sets `(chunk_id, sentence_index)` — this gives genuinely distinct relation lists per concept instead of every concept linking to the same set.
+6. Concept IDs are content-derived, so incremental re-indexing skips unchanged concepts.
+
+OKF concept hits during retrieval expand back to their original source chunks before reranking, so citations always point to the real PDF page.
+
+---
+
+## Project Structure
+
+```
+PDF-RAG/
+├── backend/
+│   ├── app/
+│   │   ├── api/              FastAPI REST endpoints
+│   │   ├── cli.py            CLI entry point
+│   │   ├── core/             Config, IDs, hashing, text utilities
+│   │   ├── database/         SQLite metadata store (documents, chunks, concepts)
+│   │   ├── generation/       Ollama client, answer prompt, extractive fallback
+│   │   ├── indexing/         Dense vector store, BM25 sparse index, embeddings
+│   │   ├── ingestion/        PDF parser, text cleaner, chunker pipeline
+│   │   ├── knowledge/        OKF concept generator, validator, importer
+│   │   ├── models.py         Shared dataclasses (Document, Chunk, Answer, Citation)
+│   │   ├── rag_service.py    Main orchestration: ingest → index → answer
+│   │   ├── retrieval/        Query analysis, fusion, reranking, context assembly
+│   │   ├── verification/     Citation and numeric fact validation
+│   │   └── workers/          Background job runner hooks
+│   └── tests/                23 stdlib unit tests (no external services needed)
+├── desktop/
+│   ├── app.py                Entry point, applies QSS theme at startup
+│   ├── controller.py         Desktop ↔ RagService bridge
+│   ├── main_window.py        Three-panel PySide6 UI
+│   ├── theme.py              Design tokens and full QSS stylesheet
+│   ├── workers.py            QThreadPool worker for background tasks
+│   ├── preferences.py        Persist user settings to disk
+│   └── packaging/            PyInstaller spec for Windows .exe
+├── docs/
+│   ├── architecture.md
+│   └── RUNNING.md
+├── evaluation/               Evaluation dataset skeleton
+├── infrastructure/           Qdrant / Docker helpers
+├── scripts/
+└── pyproject.toml
+```
+
+---
+
+## Running the Tests
+
+All 23 tests run without Ollama, Docling, or any external service — the test suite uses hash embeddings and file-based fixtures.
 
 ```powershell
 py -m unittest discover -s backend/tests
-py -m backend.app.cli status
-py -m backend.app.cli retrieve "your question" --debug
-py -m backend.app.cli validate-okf .\path\to\okf-bundle
-py -m backend.app.cli import-okf .\path\to\okf-bundle
 ```
 
-After installing FastAPI/Uvicorn:
+Expected output:
 
-```powershell
-py -m uvicorn backend.app.api.main:app --reload
+```
+Ran 23 tests in ~3s
+OK
 ```
 
-## Project Shape
+---
 
-```text
-backend/
-  app/
-    api/              FastAPI endpoints
-    core/             config, IDs, hashing, text helpers
-    database/         SQLite metadata store
-    generation/       answer prompt, Ollama client, fallback answerer
-    indexing/         local vector and sparse indexes
-    ingestion/        parser, cleaning, chunking pipeline
-    knowledge/        OKF concept generation and validation
-    retrieval/        query analysis, fusion, reranking, context assembly
-    verification/     citation and numeric validation
-    workers/          job runner hooks
-  tests/              stdlib unit tests
-docs/                 architecture notes
-evaluation/           evaluation dataset skeleton
-infrastructure/       Qdrant/Docker helper files
-desktop/              PySide6 offline desktop app and packaging spec
-```
+## FAQ
 
-## Current MVP Behavior
+**Do I need internet?**
+No. After pulling Ollama models once, everything runs offline.
 
-- Text-like files ingest immediately.
-- PDFs use Docling first when installed, PyMuPDF second when installed, and otherwise return a clear setup error.
-- Dense embeddings use Ollama when available, with a deterministic local hash embedding fallback for development tests.
-- Sparse retrieval uses an in-repo BM25 implementation.
-- Retrieval combines source dense, source sparse, and OKF concept-assisted source expansion with Reciprocal Rank Fusion.
-- Answers cite document name, page number, and chunk ID.
-- Unsupported answers fall back to: `I could not find sufficient evidence in the uploaded documents to answer this question.`
-- OKF bundles can be generated from ingested chunks, validated, imported, indexed, and used for retrieval.
-- The desktop app can run with Ollama disabled for fallback testing, or with local Ollama models for production offline use.
-- The desktop install includes PyMuPDF, so normal text PDFs work without installing Docling. Docling remains the stronger optional parser/OCR path for scanned or complex PDFs.
+**Can I use it without Ollama?**
+Yes — leave `RAG_USE_OLLAMA=0`. The app falls back to deterministic hash embeddings and an extractive (non-generative) answerer. Great for testing without a GPU.
 
-The source PDF chunks remain the authority. OKF Markdown concepts are derived artifacts used to improve retrieval, not final citations.
+**My PDF isn't being parsed correctly.**
+Install Docling for OCR support (`pip install -e .[pdf]`) and set `RAG_FORCE_OCR=1`. Docling handles scanned and image-based PDFs. Text-native PDFs should parse fine with the default PyMuPDF path.
 
-## OKF Support
+**Ingestion is slow for large PDFs.**
+Tune `RAG_EMBEDDING_BATCH_SIZE` (default 32). Larger values use more VRAM but reduce round-trips to Ollama. Also ensure `ollama ps` shows `qwen3-embedding:4b` loaded on GPU, not CPU.
 
-The OKF layer uses portable Markdown files with YAML frontmatter:
+**How do I add a new document?**
+Drag it into the desktop app's Import dialog, or run `py -m backend.app.cli ingest path/to/file.pdf`. The index updates incrementally — only new chunks are embedded.
 
-- Required validation: every concept file must have frontmatter with `type`; `type: concept` files must include `id` and `title`.
-- Metadata supported: `aliases`, `tags`, `related`, `depends_on`, `verification_status`, `source_chunk_ids`, `source_documents`, and `source_chunks`.
-- Generated bundles include `index.md`, `concepts/index.md`, and Markdown links between related concepts.
-- Imported bundles are copied into `backend/data/knowledge/`, stored in SQLite metadata, and indexed in both dense and BM25 concept indexes.
-- Query retrieval follows three paths: OKF concept retrieval, raw source dense retrieval, and raw source sparse retrieval. OKF concept hits expand back to original source chunk IDs before final reranking and citation.
+---
+
+## Acknowledgements
+
+- [Ollama](https://ollama.com) · [Qwen3](https://huggingface.co/Qwen) · [PyMuPDF](https://pymupdf.readthedocs.io) · [Docling](https://github.com/DS4SD/docling) · [PySide6](https://doc.qt.io/qtforpython-6/)
+
+---
+
+*Built by [Amartya Vishwakarma](https://github.com/Amartya-007) · Contributions welcome*
