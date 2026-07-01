@@ -70,7 +70,10 @@ def get_settings() -> Settings:
         rerank_top_k=int(os.getenv("RAG_RERANK_TOP_K", "30")),
         final_context_chunks=int(os.getenv("RAG_FINAL_CONTEXT_CHUNKS", "8")),
         temperature=float(os.getenv("RAG_TEMPERATURE", "0.1")),
-        embedding_batch_size=int(os.getenv("RAG_EMBEDDING_BATCH_SIZE", "32")),
+        # Large batch: send up to 64 chunks per Ollama call.
+        # Ollama batches them internally — one model load, many embeddings.
+        # Previously 32 was used but Ollama handles larger batches fine.
+        embedding_batch_size=int(os.getenv("RAG_EMBEDDING_BATCH_SIZE", "64")),
         use_ollama=_bool_env("RAG_USE_OLLAMA", False),
         allow_hash_embeddings=_bool_env("RAG_ALLOW_HASH_EMBEDDINGS", True),
         force_ocr=_bool_env("RAG_FORCE_OCR", False),

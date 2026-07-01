@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from backend.app.core.config import Settings, get_settings
+from backend.app.database.store import DEFAULT_SESSION_ID
 from backend.app.models import Answer, ChatSession, Chunk, Document
 from backend.app.rag_service import RagService
 from desktop.model_readiness import ModelReadiness, ModelReadinessChecker
@@ -49,14 +50,39 @@ class DesktopController:
     def create_session(self, title: str | None = None) -> ChatSession:
         return self.service.create_session(title)
 
+    def rename_session(self, session_id: str, title: str) -> None:
+        self.service.store.rename_session(session_id, title)
+
+    def delete_session(self, session_id: str) -> None:
+        self.service.delete_session_documents(session_id)
+        # If we deleted the active session, fall back to default
+        if self.service.session_id == session_id:
+            self.service.set_session(DEFAULT_SESSION_ID)
+
+    def delete_document(self, document_id: str) -> None:
+        """Remove a single document and its vectors from the active session."""
+        self.service.delete_document(document_id)
+
+    def session_document_count(self, session_id: str) -> int:
+        return self.service.store.count_documents_for_session(session_id)
+
     def list_documents(self) -> list[Document]:
         return self.service.store.list_documents(self.service.session_id)
 
-    def ingest(self, path: str | Path, build_okf: bool = True) -> Document:
-        return self.service.ingest(Path(path), build_okf=build_okf)
+    def ingest(
+        self,
+        path: str | Path,
+        build_okf: bool = False,
+        progress_callback: object = None,
+    ) -> Document:
+        return self.service.ingest(
+            Path(path),
+            build_okf=build_okf,
+            progress_callback=progress_callback,
+        )
 
     def repair_unready_documents(self) -> list[Document]:
-        return self.service.repair_unready_documents()
+        return self.service.repair_unready_documents(build_okf=False)
 
     def ask(self, question: str, include_debug: bool = False) -> Answer:
         return self.service.ask(question, include_debug=include_debug)

@@ -9,7 +9,7 @@ from backend.app.models import ChatSession, Chunk, Document
 
 
 DEFAULT_SESSION_ID = "default"
-DEFAULT_SESSION_TITLE = "Legacy Chat"
+DEFAULT_SESSION_TITLE = "Welcome"
 
 
 class MetadataStore:
@@ -128,6 +128,47 @@ class MetadataStore:
             rows = conn.execute("select * from sessions order by created_at desc").fetchall()
         return [self._session_from_row(row) for row in rows]
 
+    def rename_session(self, session_id: str, title: str) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "update sessions set title = ? where session_id = ?",
+                (title, session_id),
+            )
+
+    def delete_session(self, session_id: str) -> None:
+        """Delete a session and all its documents and chunks."""
+        with self.connect() as conn:
+            doc_rows = conn.execute(
+                "select document_id from documents where session_id = ?",
+                (session_id,),
+            ).fetchall()
+            doc_ids = [row["document_id"] for row in doc_rows]
+            if doc_ids:
+                marks = ",".join("?" for _ in doc_ids)
+                conn.execute(f"delete from chunks where document_id in ({marks})", doc_ids)
+            conn.execute("delete from documents where session_id = ?", (session_id,))
+            conn.execute("delete from sessions where session_id = ?", (session_id,))
+
+    def delete_document(self, document_id: str) -> list[str]:
+        """Delete a single document and its chunks. Returns list of deleted chunk_ids."""
+        with self.connect() as conn:
+            chunk_rows = conn.execute(
+                "select chunk_id from chunks where document_id = ?",
+                (document_id,),
+            ).fetchall()
+            chunk_ids = [row["chunk_id"] for row in chunk_rows]
+            conn.execute("delete from chunks where document_id = ?", (document_id,))
+            conn.execute("delete from documents where document_id = ?", (document_id,))
+        return chunk_ids
+
+    def count_documents_for_session(self, session_id: str) -> int:
+        with self.connect() as conn:
+            row = conn.execute(
+                "select count(*) as count from documents where session_id = ?",
+                (session_id,),
+            ).fetchone()
+        return int(row["count"]) if row else 0
+
     def upsert_document(self, document: Document) -> None:
         with self.connect() as conn:
             conn.execute(
@@ -245,6 +286,14 @@ class MetadataStore:
                     "select * from chunks where session_id = ?",
                     (session_id,),
                 ).fetchall()
+        return [self._chunk_from_row(row) for row in rows]
+
+    def list_chunks_for_document(self, document_id: str) -> list[Chunk]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                "select * from chunks where document_id = ?",
+                (document_id,),
+            ).fetchall()
         return [self._chunk_from_row(row) for row in rows]
 
     def chunks_by_ids(self, chunk_ids: list[str]) -> list[Chunk]:

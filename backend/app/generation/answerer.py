@@ -26,48 +26,35 @@ class Answerer:
             return Answer(question=question, answer=INSUFFICIENT_EVIDENCE, citations=[], answerable=False)
 
         evidence, citations = build_evidence_block(chunks)
+
+        # 1. Fast-path extractive answers (regex patterns for well-known fields)
         fact_answer = self._extractive_fact_answer(question, chunks, citations)
         if fact_answer:
-            return Answer(
-                question=question,
-                answer=fact_answer,
-                citations=citations,
-                answerable=True,
-                debug=debug or {},
-            )
+            return Answer(question=question, answer=fact_answer, citations=citations,
+                          answerable=True, debug=debug or {})
 
+        # 2. Extractive definition/topic answers (always returns something if
+        #    chunks were retrieved, preventing unnecessary Ollama calls)
         definition_answer = self._extractive_definition_answer(question, chunks, citations)
         if definition_answer:
-            return Answer(
-                question=question,
-                answer=definition_answer,
-                citations=citations,
-                answerable=True,
-                debug=debug or {},
-            )
+            return Answer(question=question, answer=definition_answer, citations=citations,
+                          answerable=True, debug=debug or {})
 
+        # 3. Ollama generation — only for queries that need synthesis/comparison
+        #    and where extractive paths produced nothing useful.
         if self.settings.use_ollama:
             try:
                 generated = self.ollama.generate(build_answer_prompt(question, evidence))
                 if generated and has_supported_citation(generated, citations):
-                    return Answer(
-                        question=question,
-                        answer=generated,
-                        citations=citations,
-                        answerable=True,
-                        debug=debug or {},
-                    )
+                    return Answer(question=question, answer=generated, citations=citations,
+                                  answerable=True, debug=debug or {})
             except GenerationError:
                 pass
 
+        # 4. Final fallback — always return the best extracted sentence
         fallback = self._extractive_answer(chunks, citations)
-        return Answer(
-            question=question,
-            answer=fallback,
-            citations=citations,
-            answerable=True,
-            debug=debug or {},
-        )
+        return Answer(question=question, answer=fallback, citations=citations,
+                      answerable=True, debug=debug or {})
 
     def _extractive_fact_answer(
         self,
@@ -129,11 +116,14 @@ class Answerer:
 
         detailed = self._is_detailed_query(normalized)
         phrase = self._definition_phrase(normalized)
+
+        # For detailed queries try to find the best passage first
         if detailed:
             passage = self._best_topic_passage(chunks, citations, query_terms, phrase)
             if passage:
                 return passage
 
+        # Score every sentence across all chunks and pick the best match
         best: tuple[int, str, Citation] | None = None
         for citation, chunk in zip(citations, chunks):
             sentences = self._sentences(chunk.text)
@@ -145,12 +135,18 @@ class Answerer:
                 if score and (best is None or score > best[0]):
                     best = (score, sentence, citation)
 
-        if best is None:
-            return None
+        if best is not None:
+            _score, sentence, citation = best
+            sentence = truncate_words(sentence, 70).strip(" -")
+            return f"{sentence} [{citation.source_id}]"
 
-        _score, sentence, citation = best
-        sentence = truncate_words(sentence, 70).strip(" -")
-        return f"{sentence} [{citation.source_id}]"
+        # No sentence matched — return the first 60 words of the top chunk
+        # so we always produce something instead of falling through to Ollama
+        if chunks and citations:
+            excerpt = truncate_words(chunks[0].text, 60).strip(" -")
+            return f"{excerpt} [{citations[0].source_id}]"
+
+        return None
 
     def _is_definition_query(self, normalized_question: str) -> bool:
         return bool(

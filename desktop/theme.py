@@ -1,84 +1,111 @@
-"""Visual theme for the desktop app.
-
-A single source of truth for colors and the QSS stylesheet, so the rest of
-the UI code never hardcodes hex values. Keeping this separate also makes it
-straightforward to add a dark theme later without touching main_window.py.
-"""
+"""Visual theme for the desktop app — dark sidebar, light chat panels."""
 
 from __future__ import annotations
 
 
 class Colors:
-    bg = "#F6F7FB"
+    # App background
+    bg = "#1C1C1E"
+    bg_light = "#F5F5F7"
+
+    # Sidebar (dark)
+    sidebar_bg = "#111111"
+    sidebar_item_hover = "#2A2A2E"
+    sidebar_item_active = "#3A3A3F"
+    sidebar_text = "#E5E5EA"
+    sidebar_text_muted = "#8E8E93"
+
+    # Panels (white)
     surface = "#FFFFFF"
-    surface_alt = "#F0F1F6"
-    border = "#E2E4EC"
-    text = "#1B1D29"
-    text_muted = "#6B7080"
-    text_faint = "#9498A6"
+    surface_alt = "#F2F2F7"
+    border = "#D1D1D6"
 
-    accent = "#4F46E5"
-    accent_hover = "#4338CA"
-    accent_pressed = "#3730A3"
-    accent_soft = "#EEF0FE"
+    # Text
+    text = "#1C1C1E"
+    text_muted = "#636366"
+    text_faint = "#AEAEB2"
 
-    success = "#16A34A"
-    success_soft = "#E7F8EC"
-    warning = "#D97706"
-    warning_soft = "#FEF3E2"
-    danger = "#DC2626"
-    danger_soft = "#FDECEC"
+    # Accent — indigo
+    accent = "#5E5CE6"
+    accent_hover = "#4845C8"
+    accent_pressed = "#3634AA"
+    accent_soft = "#EEEEFF"
 
-    user_bubble = "#4F46E5"
+    # Status
+    success = "#30D158"
+    success_soft = "#E3F9EC"
+    warning = "#FF9F0A"
+    warning_soft = "#FFF4E0"
+    danger = "#FF453A"
+    danger_soft = "#FFEEED"
+
+    # Chat bubbles
+    user_bubble = "#5E5CE6"
     user_bubble_text = "#FFFFFF"
-    assistant_bubble = "#F0F1F6"
-    assistant_bubble_text = "#1B1D29"
+    assistant_bubble = "#F2F2F7"
+    assistant_bubble_text = "#1C1C1E"
 
 
 STYLESHEET = f"""
 * {{
-    font-family: "Segoe UI", "Inter", "Helvetica Neue", Arial, sans-serif;
-    color: {Colors.text};
+    font-family: "Segoe UI", "SF Pro Text", "Inter", Arial, sans-serif;
 }}
 
-QMainWindow, QWidget#root {{
-    background-color: {Colors.bg};
+QMainWindow {{
+    background-color: {Colors.sidebar_bg};
+}}
+
+QWidget#root {{
+    background-color: {Colors.sidebar_bg};
 }}
 
 QWidget {{
     background-color: transparent;
+    color: {Colors.text};
+}}
+
+/* ---- Header ---- */
+QFrame#headerBar {{
+    background-color: {Colors.sidebar_bg};
+    border-bottom: 1px solid #2A2A2E;
+    min-height: 52px;
 }}
 
 QLabel#appTitle {{
-    font-size: 17px;
+    font-size: 16px;
     font-weight: 700;
-    color: {Colors.text};
+    color: {Colors.sidebar_text};
 }}
 
 QLabel#appSubtitle {{
     font-size: 11px;
-    color: {Colors.text_muted};
+    color: {Colors.sidebar_text_muted};
 }}
 
-QFrame#headerBar {{
-    background-color: {Colors.surface};
-    border-bottom: 1px solid {Colors.border};
+/* ---- Sidebar panel ---- */
+QFrame#sidebarPanel {{
+    background-color: {Colors.sidebar_bg};
+    border: none;
+    border-radius: 0px;
 }}
 
+/* ---- Content panels (chat + citations) ---- */
 QFrame#panel {{
     background-color: {Colors.surface};
     border: 1px solid {Colors.border};
-    border-radius: 10px;
+    border-radius: 12px;
 }}
 
 QLabel#sectionTitle {{
-    font-size: 12px;
+    font-size: 11px;
     font-weight: 700;
     color: {Colors.text_muted};
-    letter-spacing: 0.5px;
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
     padding: 2px 2px 6px 2px;
 }}
 
+/* ---- Buttons ---- */
 QPushButton {{
     background-color: {Colors.surface};
     border: 1px solid {Colors.border};
@@ -118,51 +145,101 @@ QPushButton#primaryButton:pressed {{
     background-color: {Colors.accent_pressed};
 }}
 
-QListWidget {{
-    background-color: {Colors.surface};
+QPushButton#sidebarButton {{
+    background-color: transparent;
+    border: 1px solid #3A3A3F;
+    border-radius: 8px;
+    padding: 7px 12px;
+    font-size: 12px;
+    font-weight: 600;
+    color: {Colors.sidebar_text};
+    text-align: left;
+}}
+
+QPushButton#sidebarButton:hover {{
+    background-color: {Colors.sidebar_item_hover};
+}}
+
+/* ---- Tree widget (sidebar sessions) ---- */
+QTreeWidget {{
+    background: transparent;
     border: none;
     outline: none;
-}}
-
-QListWidget::item {{
-    border: none;
-    padding: 0px;
-    margin: 2px 0px;
-}}
-
-QListWidget::item:selected {{
-    background-color: {Colors.accent_soft};
-    border-radius: 8px;
-}}
-
-QLineEdit {{
-    background-color: {Colors.surface};
-    border: 1px solid {Colors.border};
-    border-radius: 8px;
-    padding: 9px 12px;
     font-size: 13px;
+    color: {Colors.sidebar_text};
+}}
+
+QTreeWidget::item {{
+    padding: 6px 8px;
+    border-radius: 8px;
+    margin: 1px 2px;
+    color: {Colors.sidebar_text};
+}}
+
+QTreeWidget::item:selected {{
+    background-color: {Colors.sidebar_item_active};
+    color: {Colors.sidebar_text};
+}}
+
+QTreeWidget::item:hover:!selected {{
+    background-color: {Colors.sidebar_item_hover};
+}}
+
+QTreeWidget::branch {{
+    background: transparent;
+    image: none;
+}}
+
+/* ---- Input (inside dark sidebar / dark panels) ---- */
+QLineEdit {{
+    background-color: #2A2A2E;
+    border: 1.5px solid #3A3A3F;
+    border-radius: 10px;
+    padding: 10px 14px;
+    font-size: 13px;
+    color: #FFFFFF;
+    selection-background-color: {Colors.accent};
+    selection-color: #FFFFFF;
 }}
 
 QLineEdit:focus {{
-    border: 1px solid {Colors.accent};
+    border: 1.5px solid {Colors.accent};
+    background-color: #2A2A2E;
 }}
 
-QTextBrowser, QPlainTextEdit {{
+QLineEdit:hover {{
+    border: 1.5px solid #4A4A4F;
+}}
+
+/* ---- Text views ---- */
+QTextBrowser {{
     background-color: {Colors.surface};
     border: none;
     font-size: 13px;
+    color: {Colors.text};
 }}
 
+QPlainTextEdit {{
+    background-color: #2A2A2E;
+    border: 1px solid #3A3A3F;
+    border-radius: 8px;
+    font-size: 12px;
+    color: #E5E5EA;
+    padding: 6px;
+}}
+
+/* ---- Splitter ---- */
 QSplitter::handle {{
-    background-color: {Colors.bg};
-    width: 10px;
+    background-color: transparent;
+    width: 6px;
 }}
 
+/* ---- Progress bar ---- */
 QProgressBar {{
     background-color: {Colors.surface_alt};
     border: none;
     border-radius: 4px;
-    height: 8px;
+    height: 6px;
 }}
 
 QProgressBar::chunk {{
@@ -170,26 +247,82 @@ QProgressBar::chunk {{
     border-radius: 4px;
 }}
 
-QComboBox, QFormLayout QLineEdit {{
-    background-color: {Colors.surface};
-    border: 1px solid {Colors.border};
+/* ---- Combo + dialog ---- */
+QComboBox {{
+    background-color: #2A2A2E;
+    border: 1px solid #3A3A3F;
     border-radius: 8px;
     padding: 6px 10px;
+    color: #FFFFFF;
+    font-size: 12px;
+}}
+
+QComboBox:hover {{
+    border-color: {Colors.accent};
+}}
+
+QComboBox QAbstractItemView {{
+    background-color: #2A2A2E;
+    color: #FFFFFF;
+    selection-background-color: {Colors.accent};
+    selection-color: #FFFFFF;
+    border: 1px solid #3A3A3F;
+}}
+
+QComboBox::drop-down {{
+    border: none;
 }}
 
 QDialog {{
-    background-color: {Colors.bg};
+    background-color: #1C1C1E;
 }}
 
+QDialog QWidget {{
+    color: #FFFFFF;
+    background-color: transparent;
+}}
+
+QDialog QLabel {{
+    color: #E5E5EA;
+}}
+
+QDialog QLineEdit {{
+    background-color: #2A2A2E;
+    border: 1px solid #3A3A3F;
+    border-radius: 8px;
+    padding: 6px 10px;
+    color: #FFFFFF;
+    font-size: 12px;
+}}
+
+QDialog QLineEdit:focus {{
+    border-color: {Colors.accent};
+}}
+
+QDialog QCheckBox {{
+    color: #E5E5EA;
+    spacing: 8px;
+}}
+
+QDialog QPlainTextEdit {{
+    background-color: #2A2A2E;
+    border: 1px solid #3A3A3F;
+    border-radius: 8px;
+    color: #E5E5EA;
+    font-size: 12px;
+    padding: 6px;
+}}
+
+/* ---- Scrollbar ---- */
 QScrollBar:vertical {{
     background: transparent;
-    width: 10px;
+    width: 8px;
 }}
 
 QScrollBar::handle:vertical {{
     background: {Colors.border};
-    border-radius: 5px;
-    min-height: 24px;
+    border-radius: 4px;
+    min-height: 20px;
 }}
 
 QScrollBar::handle:vertical:hover {{
