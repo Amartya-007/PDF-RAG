@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+from datetime import datetime
 from pathlib import Path
 
 try:
@@ -88,36 +89,44 @@ def _format_elapsed(secs: float | None) -> str:
     return f"{m}m {secs - m * 60:.1f}s"
 
 
+def _current_time_str() -> str:
+    """Return current time as 'HH:MM AM/PM'."""
+    return datetime.now().strftime("%I:%M %p").lstrip("0")
+
+
 # ══════════════════════════════════════════════════════════════════════
 #  Chat message renderer
 # ══════════════════════════════════════════════════════════════════════
 
-def _render_user_msg(text: str) -> str:
+def _render_user_msg(text: str, timestamp: str | None = None) -> str:
     escaped = html.escape(text).replace("\n", "<br>")
+    ts = timestamp or _current_time_str()
     return f"""
-<div style="margin:12px 0; display:flex; justify-content:flex-end;">
+<div style="margin:16px 0; display:flex; justify-content:flex-end;">
   <table width="100%" cellpadding="0" cellspacing="0"><tr>
-    <td width="60%">&nbsp;</td>
+    <td width="15%">&nbsp;</td>
     <td>
-      <div style="background:{Colors.user_bubble}; border-radius:14px 14px 4px 14px;
-                  padding:12px 16px; font-size:13px; color:{Colors.user_text};
-                  line-height:1.55;">
-        {escaped}
+      <div style="display:flex; align-items:center; margin-bottom:6px;">
+        <div style="width:32px; height:32px; border-radius:50%;
+                    background:{Colors.accent}; text-align:center;
+                    line-height:32px; color:white; font-size:11px; font-weight:700;
+                    margin-right:10px;">You</div>
+        <span style="font-weight:700; font-size:13px; color:{Colors.text};">You</span>
+        <span style="font-size:11px; color:{Colors.text_faint}; margin-left:10px;">{ts}</span>
       </div>
-    </td>
-    <td width="12" style="padding-left:10px; vertical-align:top;">
-      <div style="width:32px; height:32px; border-radius:50%;
-                  background:{Colors.accent}; text-align:center;
-                  line-height:32px; color:white; font-size:12px; font-weight:700;">
-        You
+      <div style="background:{Colors.user_bubble}; border-radius:14px 14px 4px 14px;
+                  padding:14px 18px; font-size:13px; color:{Colors.user_text};
+                  line-height:1.6; margin-left:42px;">
+        {escaped}
       </div>
     </td>
   </tr></table>
 </div>"""
 
 
-def _render_assist_msg(text: str, citations: list[Citation], elapsed_seconds: float | None = None) -> str:
+def _render_assist_msg(text: str, citations: list[Citation], elapsed_seconds: float | None = None, timestamp: str | None = None) -> str:
     escaped = html.escape(text).replace("\n", "<br>")
+    ts = timestamp or _current_time_str()
     cite_refs = ""
     if citations:
         refs = []
@@ -138,19 +147,27 @@ def _render_assist_msg(text: str, citations: list[Citation], elapsed_seconds: fl
     time_label = ""
     if elapsed_seconds is not None:
         time_label = f'<div style="font-size:10px; color:{Colors.text_faint}; margin-top:4px;">⏱ {_format_elapsed(elapsed_seconds)}</div>'
-        
+
+    # Status text
+    status_text = "(streaming complete)" if elapsed_seconds is not None else ""
+
     return f"""
-<div style="margin:12px 0;">
+<div style="margin:16px 0;">
   <table width="100%" cellpadding="0" cellspacing="0"><tr>
-    <td width="12" style="padding-right:10px; vertical-align:top;">
-      <div style="width:32px; height:32px; border-radius:50%;
-                  background:{Colors.bg_card}; border:1px solid {Colors.border_light};
-                  text-align:center; line-height:32px; font-size:14px;">🤖</div>
-    </td>
     <td>
+      <div style="display:flex; align-items:center; margin-bottom:6px;">
+        <div style="width:32px; height:32px; border-radius:50%;
+                    background:{Colors.bg_card}; border:1px solid {Colors.border_light};
+                    text-align:center; line-height:32px; font-size:14px;
+                    margin-right:10px;">🤖</div>
+        <span style="font-weight:700; font-size:13px; color:{Colors.text};">Assistant</span>
+        <span style="font-size:11px; color:{Colors.text_faint}; margin-left:10px;">{ts}</span>
+        <span style="font-size:11px; color:{Colors.text_faint}; margin-left:8px;">{status_text}</span>
+      </div>
       <div style="background:{Colors.assist_bubble}; border-radius:4px 14px 14px 14px;
-                  border:1px solid {Colors.border}; padding:14px 16px;
-                  font-size:13px; color:{Colors.assist_text}; line-height:1.6;">
+                  border:1px solid {Colors.border}; padding:16px 18px;
+                  font-size:13px; color:{Colors.assist_text}; line-height:1.65;
+                  margin-left:42px;">
         {escaped}
         {cite_refs}
         {time_label}
@@ -164,7 +181,7 @@ def _render_assist_msg(text: str, citations: list[Citation], elapsed_seconds: fl
 def _render_system_note(text: str) -> str:
     return (
         f'<div style="text-align:center; color:{Colors.text_faint}; '
-        f'font-size:11px; margin:8px 0;">{html.escape(text)}</div>'
+        f'font-size:11px; margin:10px 0;">{html.escape(text)}</div>'
     )
 
 
@@ -180,22 +197,23 @@ class CitationCard(QWidget):
 
     def _build(self, c: Citation, idx: int, primary: bool) -> None:
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 10, 12, 10)
-        layout.setSpacing(6)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(8)
 
         # ── top row: filename + primary badge ────────────────────────
         top = QHBoxLayout()
         top.setSpacing(8)
-        icon = _label("📄", 12)
+        icon = _label("📄", 13)
         top.addWidget(icon)
-        name = _label(c.filename, 12, bold=True, color=Colors.text)
-        name.setMaximumWidth(160)
+        name = _label(c.filename, 13, bold=True, color=Colors.text)
+        name.setMinimumWidth(80)
+        name.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         top.addWidget(name, 1)
         if primary:
             badge = _label("★  Primary source", 10, bold=True, color=Colors.accent)
             badge.setStyleSheet(
                 f"color:{Colors.accent}; background:{Colors.accent_soft};"
-                "border-radius:6px; padding:2px 8px; font-size:10px; font-weight:700;"
+                "border-radius:6px; padding:3px 10px; font-size:10px; font-weight:700;"
             )
             top.addWidget(badge)
         layout.addLayout(top)
@@ -208,23 +226,31 @@ class CitationCard(QWidget):
         meta_row = QHBoxLayout()
         meta_row.setSpacing(6)
         meta_row.addWidget(_label(f"Page {pages}", 10, color=Colors.text_muted))
-        meta_row.addWidget(_label("·", 10, color=Colors.text_faint))
+        meta_row.addWidget(_label("•", 10, color=Colors.text_faint))
         meta_row.addWidget(_label(f"Chunk {idx}", 10, color=Colors.text_muted))
         meta_row.addStretch(1)
         rel = _label(f"Relevance {score:.2f}", 10, bold=True, color=rc)
         rel.setStyleSheet(
             f"color:{rc}; background:{rc}22; border-radius:5px;"
-            f"padding:1px 7px; font-size:10px; font-weight:700;"
+            f"padding:2px 8px; font-size:10px; font-weight:700;"
         )
         meta_row.addWidget(rel)
         layout.addLayout(meta_row)
 
         # ── excerpt ───────────────────────────────────────────────────
-        excerpt_short = c.excerpt[:180].replace("\n", " ")
-        if len(c.excerpt) > 180:
+        excerpt_short = c.excerpt[:200].replace("\n", " ")
+        if len(c.excerpt) > 200:
             excerpt_short += "…"
         excerpt_lbl = _label(excerpt_short, 11, color=Colors.text_muted, wrap=True)
+        excerpt_lbl.setMinimumHeight(30)
         layout.addWidget(excerpt_lbl)
+
+        # ── expand hint ───────────────────────────────────────────────
+        more_row = QHBoxLayout()
+        more_row.addWidget(_label("…", 11, color=Colors.text_faint))
+        more_row.addStretch(1)
+        more_row.addWidget(_label("…", 11, color=Colors.text_faint))
+        layout.addLayout(more_row)
 
 
 def _guess_relevance(index: int) -> float:
@@ -243,7 +269,7 @@ class MainWindow(QMainWindow):
         self.thread_pool = QThreadPool.globalInstance()
         self._chat_started = False
         self.setWindowTitle("Local PDF RAG")
-        self.setMinimumSize(1100, 680)
+        self.setMinimumSize(1100, 700)
         self._build_ui()
         self.refresh_documents()
 
@@ -270,7 +296,7 @@ class MainWindow(QMainWindow):
 
         sidebar = self._build_sidebar()
         sidebar.setObjectName("sidebar")
-        sidebar.setMinimumWidth(220)
+        sidebar.setMinimumWidth(240)
         sidebar.setMaximumWidth(400)
 
         chat = self._build_chat_area()
@@ -279,12 +305,15 @@ class MainWindow(QMainWindow):
         sources = self._build_sources_panel()
         sources.setObjectName("sourcesPanel")
         sources.setMinimumWidth(300)
-        sources.setMaximumWidth(480)
+        sources.setMaximumWidth(500)
 
         splitter.addWidget(sidebar)
         splitter.addWidget(chat)
         splitter.addWidget(sources)
-        splitter.setSizes([300, 720, 400])
+        splitter.setSizes([300, 600, 380])
+        splitter.setStretchFactor(0, 0)   # sidebar: fixed-ish
+        splitter.setStretchFactor(1, 1)   # chat: stretches
+        splitter.setStretchFactor(2, 0)   # sources: fixed-ish
 
         body_hbox.addWidget(splitter)
         root_vbox.addWidget(body, 1)
@@ -298,25 +327,26 @@ class MainWindow(QMainWindow):
     def _build_header(self) -> QWidget:
         bar = QWidget()
         bar.setObjectName("headerBar")
-        bar.setFixedHeight(52)
+        bar.setFixedHeight(54)
         hbox = QHBoxLayout(bar)
-        hbox.setContentsMargins(16, 0, 16, 0)
+        hbox.setContentsMargins(18, 0, 18, 0)
         hbox.setSpacing(10)
 
         # Logo + name
         logo = _label("📄", 18)
-        app_name = _label("Local PDF RAG", 14, bold=True)
+        app_name = _label("Local PDF RAG", 15, bold=True)
         app_name.setObjectName("appName")
         version = _label("v1.2.0", 10, color=Colors.text_muted)
         version.setObjectName("appVersion")
 
         hbox.addWidget(logo)
         hbox.addWidget(app_name)
+        hbox.addSpacing(6)
         hbox.addWidget(version)
-        hbox.addSpacing(12)
+        hbox.addSpacing(10)
 
         # Status pill
-        self._header_status = QLabel("● All good")
+        self._header_status = QLabel("●  All good")
         self._header_status.setObjectName("statusPill")
         hbox.addWidget(self._header_status)
         hbox.addStretch(1)
@@ -326,24 +356,28 @@ class MainWindow(QMainWindow):
         search.setObjectName("searchBar")
         search.setPlaceholderText("Search chats or documents…")
         search.setFixedWidth(260)
+        search.setFixedHeight(34)
         hbox.addWidget(search)
         shortcut = _label("Ctrl+K", 10, color=Colors.text_faint)
         shortcut.setStyleSheet(
             f"color:{Colors.text_faint}; background:{Colors.bg_card};"
-            f"border:1px solid {Colors.border}; border-radius:5px; padding:2px 6px;"
+            f"border:1px solid {Colors.border}; border-radius:5px; padding:3px 8px;"
         )
         hbox.addWidget(shortcut)
-        hbox.addSpacing(8)
+        hbox.addSpacing(12)
 
         settings_btn = QPushButton("⚙  Settings")
-        settings_btn.setObjectName("ghostBtn")
+        settings_btn.setObjectName("headerBtn")
+        settings_btn.setFixedHeight(34)
         settings_btn.clicked.connect(self.show_settings)
         hbox.addWidget(settings_btn)
 
         theme_btn = QPushButton("🌙  Theme")
-        theme_btn.setObjectName("ghostBtn")
+        theme_btn.setObjectName("headerBtn")
+        theme_btn.setFixedHeight(34)
         hbox.addWidget(theme_btn)
 
+        # Window control buttons are handled by the OS window manager
         return bar
 
     # ──────────────────────────────────────────────────────────────────
@@ -353,24 +387,28 @@ class MainWindow(QMainWindow):
     def _build_sidebar(self) -> QWidget:
         sidebar = QWidget()
         vbox = QVBoxLayout(sidebar)
-        vbox.setContentsMargins(12, 14, 12, 14)
+        vbox.setContentsMargins(14, 16, 14, 14)
         vbox.setSpacing(10)
 
-        # New Chat + Import PDFs
+        # ── New Chat + Import PDFs ────────────────────────────────────
         top_btns = QHBoxLayout()
+        top_btns.setSpacing(8)
         new_chat = QPushButton("＋  New Chat")
         new_chat.setObjectName("primaryBtn")
+        new_chat.setFixedHeight(40)
         new_chat.clicked.connect(self._new_chat)
         import_btn = QPushButton("⬆  Import PDFs")
         import_btn.setObjectName("ghostBtn")
+        import_btn.setFixedHeight(40)
         import_btn.clicked.connect(self.import_documents)
-        top_btns.addWidget(new_chat, 2)
-        top_btns.addWidget(import_btn, 1)
+        top_btns.addWidget(new_chat, 3)
+        top_btns.addWidget(import_btn, 2)
         vbox.addLayout(top_btns)
-        vbox.addSpacing(4)
+        vbox.addSpacing(6)
 
-        # Workspaces heading
+        # ── Workspaces heading ────────────────────────────────────────
         ws_row = QHBoxLayout()
+        ws_row.setContentsMargins(0, 0, 0, 0)
         ws_lbl = _label("WORKSPACES", 10, color=Colors.text_faint)
         ws_lbl.setObjectName("sectionLabel")
         ws_row.addWidget(ws_lbl)
@@ -380,10 +418,10 @@ class MainWindow(QMainWindow):
         ws_row.addWidget(add_ws)
         vbox.addLayout(ws_row)
 
-        # Document tree
+        # ── Document tree ─────────────────────────────────────────────
         self.doc_tree = QTreeWidget()
         self.doc_tree.setHeaderHidden(True)
-        self.doc_tree.setIndentation(16)
+        self.doc_tree.setIndentation(18)
         self.doc_tree.setAnimated(True)
         self.doc_tree.setColumnCount(1)
         self.doc_tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -391,38 +429,58 @@ class MainWindow(QMainWindow):
         self.doc_tree.itemClicked.connect(self._on_tree_item_clicked)
         vbox.addWidget(self.doc_tree, 1)
 
+        # ── Divider ───────────────────────────────────────────────────
         vbox.addWidget(_divider())
+        vbox.addSpacing(4)
 
-        # Local Data Status
-        status_lbl = _label("Local Data Status", 11, bold=True, color=Colors.text_muted)
-        vbox.addWidget(status_lbl)
+        # ── Local Data Status ─────────────────────────────────────────
+        status_section = QWidget()
+        status_section.setObjectName("localDataSection")
+        status_vbox = QVBoxLayout(status_section)
+        status_vbox.setContentsMargins(0, 0, 0, 0)
+        status_vbox.setSpacing(6)
+
+        status_header = QHBoxLayout()
+        status_header.setSpacing(6)
+        status_header.addWidget(_label("📊", 13))
+        status_header.addWidget(_label("Local Data Status", 12, bold=True, color=Colors.text_muted))
+        status_header.addStretch(1)
+        status_vbox.addLayout(status_header)
+
         info = _label("All data is stored locally on this device.", 10, color=Colors.text_faint, wrap=True)
-        vbox.addWidget(info)
+        status_vbox.addWidget(info)
+        status_vbox.addSpacing(4)
 
         self._stat_docs   = self._stat_card("Documents", "—")
         self._stat_chunks = self._stat_card("Indexed Chunks", "—")
         self._stat_size   = self._stat_card("Storage Used", "—")
         stat_row = QHBoxLayout()
-        stat_row.setSpacing(6)
+        stat_row.setSpacing(8)
         for card in (self._stat_docs, self._stat_chunks, self._stat_size):
-            stat_row.addWidget(card)
-        vbox.addLayout(stat_row)
+            card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+            stat_row.addWidget(card, 1)
+        status_vbox.addLayout(stat_row)
 
+        vbox.addWidget(status_section)
+        vbox.addSpacing(4)
         vbox.addWidget(_divider())
+        vbox.addSpacing(6)
 
-        # Bottom: Ollama + model
+        # ── Bottom: Ollama + model ────────────────────────────────────
         bottom = QHBoxLayout()
         bottom.setSpacing(8)
         self._ollama_dot = _label("●", 12, color=Colors.success)
         self._ollama_lbl = _label("Ollama connected", 11, color=Colors.text_muted)
         bottom.addWidget(self._ollama_dot)
         bottom.addWidget(self._ollama_lbl, 1)
+
         model_col = QVBoxLayout()
-        model_col.setSpacing(0)
+        model_col.setSpacing(1)
         model_col.addWidget(_label("Model", 9, color=Colors.text_faint))
         self._model_lbl = _label("—", 11, bold=True, color=Colors.text)
         model_col.addWidget(self._model_lbl)
         bottom.addLayout(model_col)
+
         gear = _icon_btn("⚙", "Settings")
         gear.clicked.connect(self.show_settings)
         bottom.addWidget(gear)
@@ -434,10 +492,11 @@ class MainWindow(QMainWindow):
         card = QWidget()
         card.setObjectName("statCard")
         col = QVBoxLayout(card)
-        col.setContentsMargins(8, 8, 8, 8)
-        col.setSpacing(2)
-        col.addWidget(_label(label, 9, color=Colors.text_faint, wrap=True))
-        val_lbl = _label(value, 16, bold=True, color=Colors.text)
+        col.setContentsMargins(10, 10, 10, 10)
+        col.setSpacing(4)
+        lbl = _label(label, 9, color=Colors.text_faint, wrap=True)
+        col.addWidget(lbl)
+        val_lbl = _label(value, 18, bold=True, color=Colors.text)
         col.addWidget(val_lbl)
         card._value_label = val_lbl   # type: ignore[attr-defined]
         return card
@@ -462,23 +521,25 @@ class MainWindow(QMainWindow):
 
     def _build_chat_titlebar(self) -> QWidget:
         bar = QWidget()
-        bar.setFixedHeight(52)
+        bar.setFixedHeight(54)
         hbox = QHBoxLayout(bar)
-        hbox.setContentsMargins(20, 0, 16, 0)
+        hbox.setContentsMargins(22, 0, 18, 0)
         hbox.setSpacing(10)
 
         self._chat_title_lbl = _label("New Chat", 16, bold=True)
         hbox.addWidget(self._chat_title_lbl)
+
         edit = _icon_btn("✏", "Rename")
         edit.clicked.connect(self._rename_active_session)
         hbox.addWidget(edit)
-        hbox.addSpacing(16)
+        hbox.addSpacing(14)
 
-        # Status pills
+        # Status pills — consistent height
         self._pill_offline   = self._status_pill("Offline",         Colors.success, Colors.success_soft)
         self._pill_ollama    = self._status_pill("Ollama connected", Colors.info,    Colors.info_soft)
         self._pill_model     = self._status_pill("Model: —",        Colors.text_muted, Colors.bg_card)
         for p in (self._pill_offline, self._pill_ollama, self._pill_model):
+            p.setFixedHeight(26)
             hbox.addWidget(p)
         hbox.addStretch(1)
 
@@ -490,8 +551,8 @@ class MainWindow(QMainWindow):
     def _status_pill(text: str, fg: str, bg: str) -> QLabel:
         pill = QLabel(text)
         pill.setStyleSheet(
-            f"color:{fg}; background:{bg}; border-radius:9px;"
-            f"padding:3px 10px; font-size:11px; font-weight:600;"
+            f"color:{fg}; background:{bg}; border-radius:10px;"
+            f"padding:4px 12px; font-size:11px; font-weight:600;"
         )
         return pill
 
@@ -504,7 +565,7 @@ class MainWindow(QMainWindow):
         container = QWidget()
         container.setStyleSheet(f"background:{Colors.bg_panel};")
         vbox = QVBoxLayout(container)
-        vbox.setContentsMargins(24, 16, 24, 8)
+        vbox.setContentsMargins(28, 18, 28, 10)
         vbox.setSpacing(0)
         vbox.setAlignment(Qt.AlignmentFlag.AlignTop)
 
@@ -524,32 +585,35 @@ class MainWindow(QMainWindow):
         outer = QWidget()
         outer.setStyleSheet(f"background:{Colors.bg_panel};")
         outer_vbox = QVBoxLayout(outer)
-        outer_vbox.setContentsMargins(24, 12, 24, 8)
-        outer_vbox.setSpacing(6)
+        outer_vbox.setContentsMargins(28, 14, 28, 10)
+        outer_vbox.setSpacing(8)
 
         # Input box
         box = QWidget()
         box.setObjectName("chatInputBox")
         box_hbox = QHBoxLayout(box)
-        box_hbox.setContentsMargins(14, 10, 10, 10)
-        box_hbox.setSpacing(8)
+        box_hbox.setContentsMargins(16, 8, 10, 8)
+        box_hbox.setSpacing(10)
 
-        attach = _icon_btn("📄", "Attach file")
+        attach = _icon_btn("📎", "Attach file")
         attach.clicked.connect(self.import_documents)
         box_hbox.addWidget(attach)
 
         self.question_input = QLineEdit()
         self.question_input.setObjectName("chatInput")
         self.question_input.setPlaceholderText("Ask a question about the selected documents…")
+        self.question_input.setMinimumHeight(36)
         self.question_input.returnPressed.connect(self.ask_question)
         box_hbox.addWidget(self.question_input, 1)
 
-        self.send_btn = QPushButton("➔")
+        self.send_btn = QPushButton("➤")
         self.send_btn.setObjectName("sendBtn")
         self.send_btn.clicked.connect(self.ask_question)
         box_hbox.addWidget(self.send_btn)
 
-        expand = _icon_btn("⤢", "Expand input")
+        expand = QPushButton("✓")
+        expand.setObjectName("expandBtn")
+        expand.setToolTip("Expand input")
         box_hbox.addWidget(expand)
 
         outer_vbox.addWidget(box)
@@ -582,11 +646,11 @@ class MainWindow(QMainWindow):
 
         # Header
         hdr = QWidget()
-        hdr.setFixedHeight(52)
+        hdr.setFixedHeight(54)
         hbox = QHBoxLayout(hdr)
-        hbox.setContentsMargins(16, 0, 16, 0)
+        hbox.setContentsMargins(18, 0, 18, 0)
         hbox.setSpacing(10)
-        src_title = _label("Sources", 15, bold=True)
+        src_title = _label("Sources", 16, bold=True)
         hbox.addWidget(src_title)
         hbox.addStretch(1)
         filter_btn = _icon_btn("🔍", "Filter")
@@ -598,14 +662,15 @@ class MainWindow(QMainWindow):
 
         # Count + sort row
         meta = QWidget()
-        meta.setFixedHeight(40)
+        meta.setFixedHeight(42)
         mhbox = QHBoxLayout(meta)
-        mhbox.setContentsMargins(16, 0, 16, 0)
-        self._cite_count_lbl = _label("0 citations", 11, color=Colors.text_muted)
+        mhbox.setContentsMargins(18, 0, 18, 0)
+        self._cite_count_lbl = _label("0 citations", 12, color=Colors.text_muted)
         mhbox.addWidget(self._cite_count_lbl)
         mhbox.addStretch(1)
         sort_box = QComboBox()
         sort_box.addItems(["Sort by relevance", "Sort by page", "Sort by file"])
+        sort_box.setFixedHeight(28)
         mhbox.addWidget(sort_box)
         vbox.addWidget(meta)
         vbox.addWidget(_divider())
@@ -620,8 +685,8 @@ class MainWindow(QMainWindow):
         self._sources_container = QWidget()
         self._sources_container.setStyleSheet(f"background:{Colors.bg_sidebar};")
         self._sources_vbox = QVBoxLayout(self._sources_container)
-        self._sources_vbox.setContentsMargins(12, 12, 12, 12)
-        self._sources_vbox.setSpacing(8)
+        self._sources_vbox.setContentsMargins(14, 14, 14, 14)
+        self._sources_vbox.setSpacing(10)
         self._sources_vbox.setAlignment(Qt.AlignmentFlag.AlignTop)
         self._sources_vbox.addWidget(self._empty_sources_widget())
         scroll.setWidget(self._sources_container)
@@ -631,12 +696,12 @@ class MainWindow(QMainWindow):
 
         # Export button
         export_row = QWidget()
-        export_row.setFixedHeight(52)
+        export_row.setFixedHeight(54)
         ehbox = QHBoxLayout(export_row)
-        ehbox.setContentsMargins(12, 8, 12, 8)
+        ehbox.setContentsMargins(14, 10, 14, 10)
         export_btn = QPushButton("⬆  Export citations")
         export_btn.setObjectName("ghostBtn")
-        export_btn.setFixedHeight(34)
+        export_btn.setFixedHeight(36)
         ehbox.addWidget(export_btn)
         vbox.addWidget(export_row)
 
@@ -788,16 +853,16 @@ class MainWindow(QMainWindow):
 
         # Header pill
         if ready:
-            self._header_status.setText("● All good")
+            self._header_status.setText("●  All good")
             self._header_status.setStyleSheet(
                 f"color:{Colors.success}; background:{Colors.success_soft};"
-                "border-radius:8px; padding:2px 10px; font-size:11px; font-weight:600;"
+                "border-radius:10px; padding:3px 10px; font-size:11px; font-weight:600;"
             )
         else:
-            self._header_status.setText("● Setup needed")
+            self._header_status.setText("●  Setup needed")
             self._header_status.setStyleSheet(
                 f"color:{Colors.warning}; background:{Colors.warning_soft};"
-                "border-radius:8px; padding:2px 10px; font-size:11px; font-weight:600;"
+                "border-radius:10px; padding:3px 10px; font-size:11px; font-weight:600;"
             )
 
         # Stat cards
@@ -838,7 +903,7 @@ class MainWindow(QMainWindow):
         self._pill_ollama.setStyleSheet(
             f"color:{Colors.info if ready else Colors.warning};"
             f"background:{Colors.info_soft if ready else Colors.warning_soft};"
-            "border-radius:9px; padding:3px 10px; font-size:11px; font-weight:600;"
+            "border-radius:10px; padding:4px 12px; font-size:11px; font-weight:600;"
         )
         self._pill_model.setText(f"Model: {model_name}")
 
@@ -1049,7 +1114,7 @@ class MainWindow(QMainWindow):
         self._pill_offline.setText(f"⏳ {label}")
         self._pill_offline.setStyleSheet(
             f"color:{Colors.warning}; background:{Colors.warning_soft};"
-            "border-radius:9px; padding:3px 10px; font-size:11px; font-weight:600;"
+            "border-radius:10px; padding:4px 12px; font-size:11px; font-weight:600;"
         )
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
 
@@ -1063,7 +1128,7 @@ class MainWindow(QMainWindow):
         self._pill_offline.setText("Offline")
         self._pill_offline.setStyleSheet(
             f"color:{Colors.success}; background:{Colors.success_soft};"
-            "border-radius:9px; padding:3px 10px; font-size:11px; font-weight:600;"
+            "border-radius:10px; padding:4px 12px; font-size:11px; font-weight:600;"
         )
         if isinstance(result, Answer):
             self._show_answer(result, elapsed)
@@ -1083,7 +1148,7 @@ class MainWindow(QMainWindow):
         self._pill_offline.setText("Error")
         self._pill_offline.setStyleSheet(
             f"color:{Colors.danger}; background:{Colors.danger_soft};"
-            "border-radius:9px; padding:3px 10px; font-size:11px; font-weight:600;"
+            "border-radius:10px; padding:4px 12px; font-size:11px; font-weight:600;"
         )
         QMessageBox.critical(self, "Error", self._friendly_error(message))
 
@@ -1102,9 +1167,9 @@ class MainWindow(QMainWindow):
 
     def _empty_chat_html(self) -> str:
         return (
-            f"<div style='text-align:center; padding:60px 20px; color:{Colors.text_faint};'>"
-            "<div style='font-size:40px;'>📄</div>"
-            f"<div style='font-size:16px; font-weight:700; color:{Colors.text_muted}; margin:12px 0 6px;'>"
+            f"<div style='text-align:center; padding:80px 24px; color:{Colors.text_faint};'>"
+            "<div style='font-size:44px;'>📄</div>"
+            f"<div style='font-size:17px; font-weight:700; color:{Colors.text_muted}; margin:14px 0 8px;'>"
             "Ask anything about your documents</div>"
             f"<div style='font-size:12px;'>Import a PDF and start asking questions.</div>"
             "</div>"
@@ -1141,7 +1206,7 @@ class MainWindow(QMainWindow):
     def _empty_sources_widget(self) -> QWidget:
         w = QWidget()
         v = QVBoxLayout(w)
-        v.setContentsMargins(8, 32, 8, 32)
+        v.setContentsMargins(10, 40, 10, 40)
         lbl = _label("Citations for your next\nanswer will appear here.",
                      12, color=Colors.text_faint, wrap=True)
         lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)

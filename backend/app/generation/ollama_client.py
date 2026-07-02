@@ -12,12 +12,9 @@ import urllib.error
 import urllib.request
 
 from backend.app.core.config import Settings
+from backend.app.domain.exceptions import GenerationError
 
 logger = logging.getLogger(__name__)
-
-
-class GenerationError(RuntimeError):
-    pass
 
 
 class OllamaClient:

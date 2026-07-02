@@ -1,15 +1,11 @@
 """Embedding service using the official Ollama Python SDK.
 
-Improvements over the previous urllib implementation
------------------------------------------------------
-- Uses `ollama.Client` which maintains a persistent HTTP connection pool
-  (httpx under the hood) instead of opening a new connection per call.
-- Concurrent batch embedding: multiple batches are sent to Ollama in
-  parallel via ThreadPoolExecutor, cutting total ingest time for a 232-chunk
-  PDF from ~109s to ~25s on typical hardware (Ollama still serialises GPU
-  work, but HTTP overhead and model-warmup per batch is eliminated).
-- keep_alive=600 (10 min) keeps the embedding model loaded between queries.
-- Two-level cache: in-memory LRU + SQLite blob store (unchanged).
+Two-level cache
+---------------
+Level 1 — in-memory LRU (OrderedDict, O(1) move-to-end):
+    Avoids re-embedding identical texts within a session.
+Level 2 — SQLite disk cache (sha256 → BLOB):
+    Survives restarts; guarantees a 232-chunk PDF is never re-embedded.
 """
 from __future__ import annotations
 
@@ -17,46 +13,50 @@ import hashlib
 import logging
 import sqlite3
 import threading
+from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from pathlib import Path
 from typing import Optional
 
 import numpy as np
 
 from backend.app.core.config import Settings
 from backend.app.core.text import batched
+from backend.app.domain.exceptions import EmbeddingError
 
 logger = logging.getLogger(__name__)
 
 _CACHE_DB = "embedding_cache.db"
 _MEMORY_CACHE_MAX = 512
-_EMBED_WORKERS = 3  # parallel Ollama embed calls; Ollama queues GPU work internally
-
-
-class EmbeddingError(RuntimeError):
-    pass
+_EMBED_WORKERS = 3
 
 
 class EmbeddingService:
-    """Embed texts via Ollama SDK with parallel batching and persistent cache."""
+    """Embed texts via Ollama SDK with parallel batching and persistent cache.
+
+    Implements the ``EmbeddingProvider`` port.
+
+    Performance characteristics
+    ---------------------------
+    - Memory LRU lookup/insert: O(1) via OrderedDict.move_to_end
+    - Disk cache lookup: O(1) via SQLite primary-key index on sha256
+    - Batch embedding: up to _EMBED_WORKERS parallel HTTP calls to Ollama
+    """
 
     def __init__(self, settings: Settings, dimensions: int = 384) -> None:
         self.settings = settings
         self.dimensions = dimensions
         self._lock = threading.Lock()
 
-        # In-memory LRU
-        self._mem: dict[str, list[float]] = {}
-        self._mem_order: list[str] = []
+        # In-memory LRU — OrderedDict gives O(1) move-to-end
+        self._mem: OrderedDict[str, list[float]] = OrderedDict()
 
         # SQLite disk cache
-        cache_dir = settings.indexes_dir
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        self._db_path = cache_dir / _CACHE_DB
+        settings.indexes_dir.mkdir(parents=True, exist_ok=True)
+        self._db_path = settings.indexes_dir / _CACHE_DB
         self._db: Optional[sqlite3.Connection] = None
         self._open_db()
 
-        # Ollama SDK client (lazy — only created when needed)
+        # Ollama SDK client (lazy — only created on first use)
         self._ollama_client: object = None
 
     # ------------------------------------------------------------------
@@ -64,6 +64,7 @@ class EmbeddingService:
     # ------------------------------------------------------------------
 
     def _open_db(self) -> None:
+        """Open SQLite with WAL + check_same_thread=False for worker threads."""
         self._db = sqlite3.connect(str(self._db_path), check_same_thread=False)
         self._db.execute(
             "CREATE TABLE IF NOT EXISTS embeddings "
@@ -79,9 +80,7 @@ class EmbeddingService:
         if self._ollama_client is None:
             try:
                 import ollama  # type: ignore
-                self._ollama_client = ollama.Client(
-                    host=self.settings.ollama_base_url,
-                )
+                self._ollama_client = ollama.Client(host=self.settings.ollama_base_url)
             except ImportError:
                 logger.warning("ollama SDK not installed; falling back to urllib")
                 self._ollama_client = False
@@ -93,13 +92,18 @@ class EmbeddingService:
             self._db = None
 
     def flush_disk_cache(self) -> None:
-        """No-op: SQLite writes committed immediately per batch."""
+        """No-op: SQLite commits are immediate after each batch."""
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
     def embed(self, texts: list[str]) -> list[list[float]]:
+        """Return one embedding vector per input text.
+
+        Raises:
+            EmbeddingError: if Ollama fails and hash fallback is disabled.
+        """
         if not texts:
             return []
         if self.settings.use_ollama:
@@ -108,7 +112,7 @@ class EmbeddingService:
             except EmbeddingError:
                 if not self.settings.allow_hash_embeddings:
                     raise
-                logger.warning("Ollama embedding failed; using hash fallback")
+                logger.warning("Ollama embedding failed — using hash fallback")
         return [self._hash_embedding(text) for text in texts]
 
     # ------------------------------------------------------------------
@@ -120,19 +124,21 @@ class EmbeddingService:
 
     def _embed_with_cache(self, texts: list[str]) -> list[list[float]]:
         results: list[Optional[list[float]]] = [None] * len(texts)
+        db_lookup: list[tuple[int, str, str]] = []
+
+        # 1. Memory LRU — O(1) per hit
+        for i, text in enumerate(texts):
+            if text in self._mem:
+                results[i] = self._mem[text]
+                self._mem.move_to_end(text)   # O(1)
+            else:
+                db_lookup.append((i, text, self._text_key(text)))
+
+        # 2. Batch SQLite lookup
         uncached_idx: list[int] = []
         uncached_txt: list[str] = []
         uncached_keys: list[str] = []
 
-        # 1. Check memory LRU
-        db_lookup: list[tuple[int, str, str]] = []
-        for i, text in enumerate(texts):
-            if text in self._mem:
-                results[i] = self._mem[text]
-            else:
-                db_lookup.append((i, text, self._text_key(text)))
-
-        # 2. Batch DB lookup
         if db_lookup and self._db:
             keys = [k for _, _, k in db_lookup]
             placeholders = ",".join("?" for _ in keys)
@@ -176,28 +182,25 @@ class EmbeddingService:
         return results  # type: ignore[return-value]
 
     def _mem_put(self, text: str, emb: list[float]) -> None:
+        """Insert into LRU, evicting the oldest entry if at capacity. O(1)."""
         if text in self._mem:
-            self._mem_order.remove(text)
-        elif len(self._mem) >= _MEMORY_CACHE_MAX:
-            oldest = self._mem_order.pop(0)
-            del self._mem[oldest]
-        self._mem[text] = emb
-        self._mem_order.append(text)
+            self._mem.move_to_end(text)
+        else:
+            if len(self._mem) >= _MEMORY_CACHE_MAX:
+                self._mem.popitem(last=False)  # remove LRU entry — O(1)
+            self._mem[text] = emb
 
     # ------------------------------------------------------------------
     # Parallel Ollama embedding
     # ------------------------------------------------------------------
 
     def _embed_parallel(self, texts: list[str]) -> list[list[float]]:
-        """Split texts into batches and embed them concurrently."""
         batch_size = max(16, self.settings.embedding_batch_size)
         batches = list(batched(texts, batch_size))
 
         if len(batches) == 1:
-            # Single batch — no overhead of thread pool
             return self._embed_one_batch(batches[0])
 
-        # Multiple batches — send concurrently
         results_by_batch: dict[int, list[list[float]]] = {}
         workers = min(_EMBED_WORKERS, len(batches))
         with ThreadPoolExecutor(max_workers=workers) as pool:
@@ -211,19 +214,14 @@ class EmbeddingService:
                     results_by_batch[idx] = fut.result()
                 except Exception as exc:
                     logger.error("parallel embed batch %d failed: %s", idx, exc)
-                    # Return zero vectors for failed batch rather than crashing
-                    results_by_batch[idx] = [
-                        [0.0] * self.dimensions for _ in batches[idx]
-                    ]
+                    results_by_batch[idx] = [[0.0] * self.dimensions for _ in batches[idx]]
 
-        # Reassemble in original order
         all_embeddings: list[list[float]] = []
         for i in range(len(batches)):
             all_embeddings.extend(results_by_batch[i])
         return all_embeddings
 
     def _embed_one_batch(self, texts: list[str]) -> list[list[float]]:
-        """Embed a single batch using the Ollama SDK (preferred) or urllib fallback."""
         client = self._get_ollama()
         if client:
             return self._embed_sdk(client, texts)
@@ -234,20 +232,26 @@ class EmbeddingService:
             response = client.embed(  # type: ignore[union-attr]
                 model=self.settings.embedding_model,
                 input=texts,
-                options={"keep_alive": 600},  # 10 min keep-alive
+                options={"keep_alive": 600},
             )
-            embeddings = response.embeddings if hasattr(response, "embeddings") else response.get("embeddings")
+            embeddings = (
+                response.embeddings
+                if hasattr(response, "embeddings")
+                else response.get("embeddings")
+            )
             if not isinstance(embeddings, list):
-                raise EmbeddingError("Ollama SDK response missing embeddings")
+                raise EmbeddingError("Ollama SDK response missing 'embeddings'")
             return embeddings
+        except EmbeddingError:
+            raise
         except Exception as exc:
-            if "EmbeddingError" in type(exc).__name__:
-                raise
             raise EmbeddingError(f"Ollama SDK embed failed: {exc}") from exc
 
     def _embed_urllib(self, texts: list[str]) -> list[list[float]]:
-        """Fallback HTTP embed when SDK is unavailable."""
-        import json, urllib.error, urllib.request
+        import json
+        import urllib.error
+        import urllib.request
+
         payload = json.dumps({
             "model": self.settings.embedding_model,
             "input": texts,
@@ -271,11 +275,10 @@ class EmbeddingService:
         return embeddings
 
     # ------------------------------------------------------------------
-    # Hash fallback (offline)
+    # Hash fallback (offline / no Ollama)
     # ------------------------------------------------------------------
 
     def _hash_embedding(self, text: str) -> list[float]:
-        import hashlib
         vector = np.zeros(self.dimensions, dtype=np.float64)
         for token in text.lower().split():
             digest = hashlib.sha256(token.encode("utf-8")).digest()

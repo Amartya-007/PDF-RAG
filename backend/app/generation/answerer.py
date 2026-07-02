@@ -4,7 +4,8 @@ import re
 
 from backend.app.core.config import Settings
 from backend.app.core.text import truncate_words
-from backend.app.generation.ollama_client import GenerationError, OllamaClient
+from backend.app.domain.exceptions import GenerationError
+from backend.app.generation.ollama_client import OllamaClient
 from backend.app.generation.prompts import build_answer_prompt
 from backend.app.models import Answer, Citation, Chunk
 from backend.app.retrieval.context_builder import build_evidence_block

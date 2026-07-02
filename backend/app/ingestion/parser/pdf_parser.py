@@ -4,11 +4,8 @@ import importlib
 from pathlib import Path
 from types import ModuleType
 
+from backend.app.domain.exceptions import ParseError, UnsupportedFileTypeError
 from backend.app.models import PageText
-
-
-class ParseError(RuntimeError):
-    pass
 
 
 class PdfParser:
@@ -16,11 +13,17 @@ class PdfParser:
         self.force_ocr = force_ocr
 
     def parse(self, path: Path) -> list[PageText]:
+        """Parse *path* and return one PageText per logical page.
+
+        Raises:
+            UnsupportedFileTypeError: for non-PDF/txt/md files.
+            ParseError: when no usable text can be extracted.
+        """
         suffix = path.suffix.lower()
         if suffix in {".txt", ".md"}:
             return [PageText(page_number=1, text=path.read_text(encoding="utf-8"))]
         if suffix != ".pdf":
-            raise ParseError(f"Unsupported file type: {path.suffix}")
+            raise UnsupportedFileTypeError(path.suffix)
         return self._parse_pdf(path)
 
     def _parse_pdf(self, path: Path) -> list[PageText]:

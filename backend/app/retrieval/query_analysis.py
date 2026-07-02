@@ -1,18 +1,20 @@
+"""Backward-compatibility shim.
+
+All classification logic now lives in ``query_classifier.QueryClassifier``.
+This module re-exports ``classify_query`` so existing callers keep working
+without changes.
+"""
 from __future__ import annotations
 
-import re
+from backend.app.retrieval.query_classifier import QueryClassifier
+
+_classifier = QueryClassifier()
 
 
 def classify_query(question: str) -> str:
-    lowered = question.lower()
-    if re.search(r"\b(compare|difference|versus|vs\.?)\b", lowered):
-        return "comparison"
-    if re.search(r"\b(summarize|summary|overview)\b", lowered):
-        return "summary"
-    if re.search(r"\b(table|highest|lowest|total|amount|number|date|when)\b", lowered):
-        return "numeric_or_table"
-    if re.search(r"\b(id|order|clause|section|code|no\.)\b", lowered):
-        return "exact_identifier"
-    if len(question.split()) <= 4:
-        return "follow_up_or_short"
-    return "direct_factual"
+    """Return the query type string for *question*.
+
+    Deprecated: prefer ``QueryClassifier.classify()`` which returns a
+    ``QueryType`` enum.  This function is kept for backward compatibility.
+    """
+    return _classifier.classify(question).value

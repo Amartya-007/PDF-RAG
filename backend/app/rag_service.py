@@ -4,14 +4,14 @@ import logging
 import re
 import shutil
 import time
-from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
-from typing import Callable
 
 from backend.app.core.config import Settings, ensure_data_dirs, get_settings
 from backend.app.core.hashing import sha256_file, stable_id
 from backend.app.database.store import DEFAULT_SESSION_ID, DEFAULT_SESSION_TITLE, MetadataStore
+from backend.app.domain.exceptions import IngestionError
 from backend.app.generation.answerer import Answerer
 from backend.app.indexing.embeddings import EmbeddingService
 from backend.app.indexing.sparse import BM25Index
@@ -19,12 +19,14 @@ from backend.app.indexing.vector_store import LocalVectorStore
 from backend.app.ingestion.chunking import Chunker
 from backend.app.ingestion.cleaning import remove_repeated_headers_footers
 from backend.app.ingestion.parser.pdf_parser import PdfParser
+from backend.app.ingestion.pipeline import IngestionPipeline
 from backend.app.knowledge.okf import OkfConcept, validate_okf_bundle
 from backend.app.knowledge.okf_generator import OkfGenerator
 from backend.app.knowledge.okf_importer import OkfImporter
 from backend.app.models import Answer, ChatSession, Chunk, Document
+from backend.app.retrieval.context_builder import build_evidence_block
 from backend.app.retrieval.fusion import reciprocal_rank_fusion
-from backend.app.retrieval.query_analysis import classify_query
+from backend.app.retrieval.query_classifier import QueryClassifier
 from backend.app.retrieval.reranking import Reranker
 
 
@@ -36,13 +38,16 @@ class RagService:
         self.settings = settings or get_settings()
         self.session_id = session_id
         ensure_data_dirs(self.settings)
+
         self.store = MetadataStore(self.settings.sqlite_path)
         self.store.init()
         self.store.ensure_session(DEFAULT_SESSION_ID, DEFAULT_SESSION_TITLE)
-        self.store.ensure_session(self.session_id, DEFAULT_SESSION_TITLE if self.session_id == DEFAULT_SESSION_ID else self.session_id)
+        self.store.ensure_session(
+            self.session_id,
+            DEFAULT_SESSION_TITLE if self.session_id == DEFAULT_SESSION_ID else self.session_id,
+        )
         self.store.mark_stale_processing_documents_failed()
-        self.parser = PdfParser(force_ocr=self.settings.force_ocr)
-        self.chunker = Chunker()
+
         self.embedder = EmbeddingService(self.settings)
         self.vectors = LocalVectorStore(self.settings.indexes_dir / "vectors.json")
         self.sparse = BM25Index(self.settings.indexes_dir / "bm25.json")
@@ -52,8 +57,24 @@ class RagService:
         self.answerer = Answerer(self.settings)
         self.okf = OkfGenerator(self.settings.okf_dir, self.store)
         self.okf_importer = OkfImporter(self.settings.okf_dir, self.store)
-        # Chunk cache: invalidated on ingest/delete, avoids full SQLite scan per query
-        self._chunk_cache: dict[str, list[Chunk]] | None = None
+
+        # Dedicated pipeline — single-responsibility ingest orchestrator
+        self._pipeline = IngestionPipeline(
+            store=self.store,
+            parser=PdfParser(force_ocr=self.settings.force_ocr),
+            chunker=Chunker(),
+            embedder=self.embedder,
+            vectors=self.vectors,
+            sparse=self.sparse,
+            documents_dir=self.settings.documents_dir,
+            embedding_batch_size=self.settings.embedding_batch_size,
+        )
+
+        # Single source of truth for query classification
+        self._classifier = QueryClassifier()
+
+        # Session-scoped chunk cache — invalidated on ingest/delete
+        self._chunk_cache: list[Chunk] | None = None
         self._chunk_cache_session: str | None = None
 
     def list_sessions(self) -> list[ChatSession]:
@@ -87,145 +108,34 @@ class RagService:
         force: bool = False,
         progress_callback: object = None,
     ) -> Document:
-        """Ingest a PDF in two phases:
+        """Ingest a document via the dedicated IngestionPipeline.
 
-        Phase 1 (fast, < 1s): parse → chunk → save to SQLite + BM25.
-                               Document is marked 'ready' immediately so
-                               keyword search works right away.
+        Args:
+            source_path:       Path to the source file.
+            build_okf:         Generate OKF knowledge graph after embedding.
+            force:             Re-ingest even if already indexed.
+            progress_callback: Optional ``(done, total, msg)`` callable for UI.
 
-        Phase 2 (slow, Ollama): embed chunks via Ollama and save vectors.
-                               Runs in the same thread but reports progress
-                               via `progress_callback(done, total, msg)`.
-
-        On re-import of an unchanged file the embedding step is skipped
-        entirely because the disk cache already holds the vectors.
+        Returns:
+            Ready ``Document`` record.
         """
-        started_at = time.perf_counter()
-        source_path = source_path.resolve()
-        logger.info("ingest start: %s session=%s", source_path, self.session_id)
-
-        # ── deduplication check ──────────────────────────────────────────
-        file_hash = sha256_file(source_path)
-        existing = self.store.find_document_by_hash(file_hash, self.session_id)
-        if (
-            existing
-            and not force
-            and existing.status == "ready"
-            and self.store.count_chunks_for_document(existing.document_id) > 0
-        ):
-            logger.info("ingest skipped (already indexed): %s", existing.filename)
-            return existing
-
-        # ── copy file to managed storage ─────────────────────────────────
-        document_id = (
-            existing.document_id
-            if existing
-            else stable_id("doc", self.session_id, source_path.name, file_hash)
+        ready_doc = self._pipeline.ingest(
+            source_path,
+            self.session_id,
+            force=force,
+            progress=progress_callback,  # type: ignore[arg-type]
         )
-        target = self.settings.documents_dir / f"{document_id}{source_path.suffix.lower()}"
-        if source_path.resolve() != target.resolve():
-            shutil.copy2(source_path, target)
-
-        document = Document(
-            document_id=document_id,
-            filename=source_path.name,
-            sha256=file_hash,
-            path=str(target),
-            status="processing",
-            session_id=self.session_id,
-        )
-        self.store.upsert_document(document)
-
-        # ── PHASE 1: parse + chunk (fast) ────────────────────────────────
-        try:
-            t0 = time.perf_counter()
-            if progress_callback:
-                progress_callback(0, 1, f"Parsing {source_path.name}…")
-            pages = self.parser.parse(target)
-            pages = remove_repeated_headers_footers(pages)
-            logger.info("parsed %d page(s) in %.2fs", len(pages), time.perf_counter() - t0)
-
-            t1 = time.perf_counter()
-            chunks = self.chunker.chunk_pages(document, pages)
-            logger.info("chunked into %d chunk(s) in %.2fs", len(chunks), time.perf_counter() - t1)
-
-            if not chunks:
-                raise ValueError("No searchable text chunks could be created from this document.")
-        except Exception:
-            self.store.update_document_status(document.document_id, "failed")
-            raise
-
-        # Save chunks to SQLite and BM25 immediately so keyword search works
-        ready_document = Document(
-            document_id=document.document_id,
-            filename=document.filename,
-            sha256=document.sha256,
-            path=document.path,
-            status="ready",
-            session_id=self.session_id,
-        )
-        self.store.upsert_document(ready_document)
-        self.store.replace_chunks(document.document_id, chunks)
-        self.sparse.add_chunks(chunks)
-        self._invalidate_chunk_cache()  # flush cache after new chunks added
-
-        # ── PHASE 2: embed + vectorise (Ollama, reports progress) ────────
-        t2 = time.perf_counter()
-        self._index_chunks_with_progress(chunks, progress_callback)
-        self.embedder.flush_disk_cache()
-        logger.info("indexed %d chunk(s) in %.2fs", len(chunks), time.perf_counter() - t2)
+        self._invalidate_chunk_cache()
 
         if build_okf:
-            t3 = time.perf_counter()
-            self.okf.generate_for_document(chunks)
-            self._rebuild_okf_indexes()
-            logger.info("OKF generated in %.2fs", time.perf_counter() - t3)
+            chunks = self.store.list_chunks_for_document(ready_doc.document_id)
+            if chunks:
+                t0 = time.perf_counter()
+                self.okf.generate_for_document(chunks)
+                self._rebuild_okf_indexes()
+                logger.info("OKF generated in %.2fs", time.perf_counter() - t0)
 
-        logger.info("ingest finished: %s in %.2fs", source_path.name, time.perf_counter() - started_at)
-        return ready_document
-
-    def _index_chunks_with_progress(
-        self,
-        chunks: list[Chunk],
-        progress_callback: object = None,
-    ) -> None:
-        """Embed chunks that aren't already in the vector store.
-
-        Reports per-batch progress so the UI can show a live counter.
-        Uses the largest feasible batch size to minimise Ollama round-trips.
-        """
-        existing = self.vectors.existing_ids()
-        new_chunks = [c for c in chunks if c.chunk_id not in existing]
-        if not new_chunks:
-            logger.info("embedding skipped — all %d chunks already cached", len(chunks))
-            return
-
-        total = len(new_chunks)
-        batch_size = max(16, self.settings.embedding_batch_size)
-        done = 0
-
-        # Import here to keep the top-level import clean
-        from backend.app.core.text import batched as _batched
-
-        for batch in _batched(new_chunks, batch_size):
-            texts = [c.text for c in batch]
-            try:
-                vectors = self.embedder.embed(texts)
-            except Exception as exc:
-                logger.error("embedding batch failed: %s — skipping", exc)
-                done += len(batch)
-                continue
-
-            self.vectors.upsert_many(
-                {c.chunk_id: v for c, v in zip(batch, vectors)}
-            )
-            done += len(batch)
-            if progress_callback:
-                progress_callback(
-                    done,
-                    total,
-                    f"Embedding {done}/{total} chunks…",
-                )
+        return ready_doc
 
     def repair_unready_documents(self, build_okf: bool = True) -> list[Document]:
         repaired: list[Document] = []
@@ -252,17 +162,22 @@ class RagService:
         ]
 
     def retrieve(self, question: str, include_debug: bool = False) -> tuple[list[Chunk], dict[str, object]]:
+        """Run the hybrid retrieval pipeline for *question*.
+
+        Uses QueryClassifier to choose between:
+        - FAST_FACT / TOPIC: BM25-only, no embedding call needed
+        - All others: parallel dense + sparse + OKF → RRF → rerank
+        """
         started_at = time.perf_counter()
         logger.info("retrieve start: %r", question)
 
-        # Use cached chunk list — avoids full SQLite scan on every query
         chunks = self._get_chunks(self.session_id)
-        by_id = {chunk.chunk_id: chunk for chunk in chunks}
+        by_id: dict[str, Chunk] = {c.chunk_id: c for c in chunks}
 
-        query_type = classify_query(question)
-        fast_fact_query = self._is_fast_fact_query(question)
-        topic_query = self._is_topic_query(question)
-        search_question = self._normalize_search_question(question)
+        query_type = self._classifier.classify(question)
+        normalised = self._classifier.normalise(question)
+        is_fast_fact = self._classifier.is_fast_fact(question)
+        is_topic = self._classifier.is_topic(question)
 
         dense_results: list[tuple[str, float]] = []
         sparse_results: list[tuple[str, float]] = []
@@ -270,65 +185,62 @@ class RagService:
         okf_source_results: list[tuple[str, float]] = []
         query_embedding: list[float] = []
 
-        if fast_fact_query or topic_query:
-            # No embedding needed — BM25 only
-            sparse_results = self.sparse.search(search_question, self.settings.sparse_top_k)
-            okf_source_results = self._retrieve_okf_sources_sparse(search_question)
+        if is_fast_fact or is_topic:
+            sparse_results = self.sparse.search(normalised, self.settings.sparse_top_k)
+            okf_source_results = self._retrieve_okf_sources_sparse(normalised)
         else:
-            # Run dense embedding + sparse search IN PARALLEL
-            def _dense_search() -> tuple[list[float], list[tuple[str, float]]]:
-                emb = self.embedder.embed([search_question])[0]
-                hits = self.vectors.search(emb, self.settings.dense_top_k)
-                return emb, hits
+            def _dense() -> tuple[list[float], list[tuple[str, float]]]:
+                emb = self.embedder.embed([normalised])[0]
+                return emb, self.vectors.search(emb, self.settings.dense_top_k)
 
-            def _sparse_search() -> list[tuple[str, float]]:
-                return self.sparse.search(search_question, self.settings.sparse_top_k)
+            def _sparse() -> list[tuple[str, float]]:
+                return self.sparse.search(normalised, self.settings.sparse_top_k)
 
             with ThreadPoolExecutor(max_workers=2) as pool:
-                dense_fut = pool.submit(_dense_search)
-                sparse_fut = pool.submit(_sparse_search)
+                dense_fut = pool.submit(_dense)
+                sparse_fut = pool.submit(_sparse)
                 query_embedding, dense_results = dense_fut.result()
                 sparse_results = sparse_fut.result()
 
             okf_concept_results, okf_source_results = self._retrieve_okf_sources(
-                search_question, query_embedding
+                normalised, query_embedding
             )
 
         fused = reciprocal_rank_fusion(
             [dense_results, sparse_results, okf_source_results],
             top_k=self.settings.fusion_top_k,
         )
-        candidates = [by_id[chunk_id] for chunk_id, _score in fused if chunk_id in by_id]
-        context_limit = self._context_limit_for_query(query_type)
+        candidates = [by_id[cid] for cid, _ in fused if cid in by_id]
+        context_limit = self._context_limit_for_query(query_type.value)
 
-        if fast_fact_query:
+        if is_fast_fact:
             selected = self._rank_fast_fact_candidates(question, chunks, candidates)[:context_limit]
-        elif topic_query:
-            selected = self._rank_topic_candidates(search_question, chunks, candidates)[:context_limit]
+        elif is_topic:
+            selected = self._rank_topic_candidates(normalised, chunks, candidates)[:context_limit]
         else:
             reranked = self.reranker.rerank(question, candidates, self.settings.rerank_top_k)
-            selected = [chunk for chunk, _score in reranked[:context_limit]]
+            selected = [c for c, _ in reranked[:context_limit]]
 
         elapsed = time.perf_counter() - started_at
         logger.info(
             "retrieve finished in %.2fs: session=%s chunks=%d candidates=%d selected=%d "
-            "fast_fact=%s topic=%s",
+            "query_type=%s",
             elapsed, self.session_id, len(chunks), len(candidates), len(selected),
-            fast_fact_query, topic_query,
+            query_type.value,
         )
 
         debug: dict[str, object] = {}
         if include_debug:
             debug = {
-                "query_type": query_type,
+                "query_type": query_type.value,
                 "dense_results": dense_results,
                 "sparse_results": sparse_results,
                 "okf_concept_results": okf_concept_results,
                 "okf_source_results": okf_source_results,
                 "fusion_results": fused,
                 "selected_chunk_ids": [c.chunk_id for c in selected],
-                "fast_fact_query": fast_fact_query,
-                "topic_query": topic_query,
+                "is_fast_fact": is_fast_fact,
+                "is_topic": is_topic,
             }
         return selected, debug
 
@@ -383,9 +295,11 @@ class RagService:
         self.store.close()
 
     def _rebuild_indexes(self) -> None:
+        """Rebuild all indexes from SQLite on startup (after crash recovery)."""
         chunks = self.store.list_chunks()
         if chunks:
-            self._index_chunks_with_progress(chunks, progress_callback=None)
+            # Re-embed any chunks not already in the vector store
+            self._pipeline._phase2_embed(chunks, progress=None)
         self._rebuild_sparse()
         self._rebuild_okf_indexes()
 
@@ -507,54 +421,6 @@ class RagService:
             return min(self.settings.final_context_chunks, 4)
         return self.settings.final_context_chunks
 
-    def _is_fast_fact_query(self, question: str) -> bool:
-        normalized = question.lower()
-        fact_terms = {
-            "full name",
-            "person name",
-            "candidate name",
-            "user name",
-            "student name",
-            "name",
-            "college",
-            "collage",
-            "university",
-            "institute",
-            "school",
-            "degree",
-            "course",
-            "branch",
-            "program",
-            "cgpa",
-            "gpa",
-            "email",
-            "mail",
-            "phone",
-            "mobile",
-            "contact",
-        }
-        return any(term in normalized for term in fact_terms)
-
-    def _is_topic_query(self, question: str) -> bool:
-        normalized = self._normalize_search_question(question).lower()
-        if self._is_fast_fact_query(normalized):
-            return False
-        return bool(
-            re.search(
-                r"\b(what is|what are|define|explain|describe|"
-                r"tell me(?: everything| all)? about|everything about)\b",
-                normalized,
-            )
-            or "in detail" in normalized
-            or "details about" in normalized
-        )
-
-    def _normalize_search_question(self, question: str) -> str:
-        normalized = question.replace("collage", "college").replace("Collage", "College")
-        normalized = normalized.replace("transection", "transaction").replace("Transection", "Transaction")
-        normalized = normalized.replace("whats", "what is").replace("Whats", "What is")
-        return normalized
-
     def _rank_fast_fact_candidates(
         self,
         question: str,
@@ -598,7 +464,7 @@ class RagService:
         return retrieved_chunks or all_chunks
 
     def _topic_phrase(self, question: str) -> str:
-        normalized = self._normalize_search_question(question).lower()
+        normalized = self._classifier.normalise(question).lower()
         normalized = re.sub(
             r"\b(what|is|are|the|a|an|define|explain|describe|tell|me|"
             r"everything|all|about|in|detail|details|please|also)\b",
@@ -609,7 +475,7 @@ class RagService:
 
     def _topic_score(self, question: str, phrase: str, chunk: Chunk) -> float:
         text = chunk.text
-        lower_text = self._normalize_search_question(text).lower()
+        lower_text = self._classifier.normalise(text).lower()
         terms = self._topic_terms(question)
         score = 0.0
         if phrase and phrase in lower_text:

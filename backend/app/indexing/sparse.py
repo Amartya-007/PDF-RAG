@@ -44,10 +44,10 @@ class BM25Index:
 
     def __init__(self, path: Path) -> None:
         self.path = path
-        # canonical text store: chunk_id → whitespace-tokenised text
         self._texts: dict[str, str] = {}
         self._lock = threading.Lock()
-        self._retriever: object = None  # bm25s.BM25 instance
+        self._retriever: object = None
+        self._corpus_tokens: object = None   # stored after _fit, avoids re-tokenisation
         self._load()
 
     # ------------------------------------------------------------------
@@ -99,33 +99,39 @@ class BM25Index:
     # ------------------------------------------------------------------
 
     def _fit(self) -> None:
-        """Rebuild the bm25s retriever from current _texts."""
+        """Rebuild the bm25s retriever from current _texts.
+
+        Stores the tokenised corpus on the instance so _search_bm25s never
+        re-tokenises on every query call.  Complexity: O(N · avg_tokens).
+        """
         if not _BM25S or not self._texts:
             self._retriever = None
+            self._corpus_tokens = None
             return
-        # bm25s needs at least 2 documents to compute avg_doc_len correctly
         corpus = list(self._texts.values())
         if len(corpus) < 2:
-            self._retriever = None  # use fallback for tiny corpora
+            self._retriever = None
+            self._corpus_tokens = None
             return
         try:
             corpus_tokens = bm25s.tokenize(corpus, stopwords="en")
             retriever = bm25s.BM25()
             retriever.index(corpus_tokens)
             self._retriever = retriever
+            self._corpus_tokens = corpus_tokens   # ← stored; never re-tokenised
         except Exception as exc:
             logger.warning("bm25s fit failed, using fallback: %s", exc)
             self._retriever = None
+            self._corpus_tokens = None
 
     def _search_bm25s(self, query: str, top_k: int) -> list[tuple[str, float]]:
         ids = list(self._texts.keys())
         k = min(top_k, len(ids))
         try:
             query_tokens = bm25s.tokenize([query], stopwords="en")
-            corpus = list(self._texts.values())
-            corpus_tokens = bm25s.tokenize(corpus, stopwords="en")
+            # Use pre-stored corpus_tokens — no re-tokenisation on each call
             results, scores = self._retriever.retrieve(  # type: ignore[union-attr]
-                query_tokens, corpus=corpus_tokens, k=k
+                query_tokens, corpus=self._corpus_tokens, k=k
             )
             out: list[tuple[str, float]] = []
             for doc_idx, score in zip(results[0], scores[0]):

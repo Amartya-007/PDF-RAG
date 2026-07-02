@@ -81,14 +81,14 @@ QWidget#headerBar {{
     border-bottom: 1px solid {Colors.border};
 }}
 QLabel#appName {{
-    font-size: 14px;
+    font-size: 15px;
     font-weight: 700;
     color: {Colors.text};
 }}
 QLabel#appVersion {{
-    font-size: 11px;
+    font-size: 10px;
     color: {Colors.text_muted};
-    padding: 2px 7px;
+    padding: 3px 8px;
     background: {Colors.bg_card};
     border-radius: 8px;
     border: 1px solid {Colors.border_light};
@@ -97,9 +97,9 @@ QLabel#statusPill {{
     font-size: 11px;
     font-weight: 600;
     color: {Colors.success};
-    padding: 2px 8px;
+    padding: 3px 10px;
     background: {Colors.success_soft};
-    border-radius: 8px;
+    border-radius: 10px;
 }}
 
 /* ── Buttons ────────────────────────────────────────────────────── */
@@ -111,6 +111,7 @@ QPushButton {{
     font-size: 12px;
     font-weight: 600;
     color: {Colors.text};
+    min-height: 18px;
 }}
 QPushButton:hover {{
     background-color: {Colors.bg_hover};
@@ -130,7 +131,8 @@ QPushButton#primaryBtn {{
     font-size: 13px;
     font-weight: 700;
     border-radius: 9px;
-    padding: 9px 18px;
+    padding: 8px 16px;
+    min-height: 20px;
 }}
 QPushButton#primaryBtn:hover {{
     background-color: {Colors.accent_hover};
@@ -140,13 +142,28 @@ QPushButton#ghostBtn {{
     background-color: transparent;
     border: 1px solid {Colors.border_light};
     color: {Colors.text_muted};
-    padding: 6px 12px;
+    padding: 7px 14px;
     font-size: 12px;
+    min-height: 18px;
 }}
 QPushButton#ghostBtn:hover {{
     background-color: {Colors.bg_hover};
     color: {Colors.text};
     border-color: {Colors.border_light};
+}}
+QPushButton#headerBtn {{
+    background-color: transparent;
+    border: 1px solid {Colors.border_light};
+    color: {Colors.text_muted};
+    padding: 6px 14px;
+    font-size: 12px;
+    font-weight: 600;
+    border-radius: 8px;
+    min-height: 16px;
+}}
+QPushButton#headerBtn:hover {{
+    background-color: {Colors.bg_hover};
+    color: {Colors.text};
 }}
 QPushButton#iconBtn {{
     background-color: transparent;
@@ -154,6 +171,7 @@ QPushButton#iconBtn {{
     color: {Colors.text_muted};
     padding: 4px;
     font-size: 13px;
+    min-height: 0px;
 }}
 QPushButton#iconBtn:hover {{
     color: {Colors.text};
@@ -163,16 +181,34 @@ QPushButton#iconBtn:hover {{
 QPushButton#sendBtn {{
     background-color: {Colors.accent};
     border: none;
-    border-radius: 10px;
-    padding: 10px 16px;
+    border-radius: 12px;
+    padding: 0px;
     color: white;
-    font-size: 15px;
+    font-size: 16px;
     font-weight: 700;
-    min-width: 46px;
-    min-height: 46px;
+    min-width: 48px;
+    min-height: 48px;
+    max-width: 48px;
+    max-height: 48px;
 }}
 QPushButton#sendBtn:hover {{
     background-color: {Colors.accent_hover};
+}}
+QPushButton#expandBtn {{
+    background-color: transparent;
+    border: 1px solid {Colors.border_light};
+    border-radius: 10px;
+    padding: 0px;
+    color: {Colors.text_muted};
+    font-size: 14px;
+    min-width: 32px;
+    min-height: 32px;
+    max-width: 32px;
+    max-height: 32px;
+}}
+QPushButton#expandBtn:hover {{
+    color: {Colors.text};
+    background-color: {Colors.bg_hover};
 }}
 
 /* ── Search bar ─────────────────────────────────────────────────── */
@@ -180,7 +216,7 @@ QLineEdit#searchBar {{
     background-color: {Colors.bg_input};
     border: 1px solid {Colors.border};
     border-radius: 9px;
-    padding: 7px 14px;
+    padding: 8px 14px;
     font-size: 12px;
     color: {Colors.text};
     min-width: 240px;
@@ -193,7 +229,7 @@ QLineEdit#chatInput {{
     border: none;
     font-size: 13px;
     color: {Colors.text};
-    padding: 4px 0px;
+    padding: 6px 0px;
 }}
 QLineEdit#chatInput::placeholder {{
     color: {Colors.text_faint};
@@ -205,7 +241,7 @@ QLabel#sectionLabel {{
     font-weight: 700;
     letter-spacing: 1px;
     color: {Colors.text_faint};
-    padding: 4px 0px 2px 0px;
+    padding: 6px 0px 4px 0px;
 }}
 
 /* ── Workspace / document tree ──────────────────────────────────── */
@@ -216,9 +252,10 @@ QTreeWidget {{
     font-size: 12px;
 }}
 QTreeWidget::item {{
-    padding: 4px 4px;
+    padding: 5px 6px;
     border-radius: 6px;
     color: {Colors.text_muted};
+    min-height: 20px;
 }}
 QTreeWidget::item:hover {{
     background-color: {Colors.bg_hover};
@@ -237,6 +274,7 @@ QWidget#statCard {{
     background-color: {Colors.bg_card};
     border: 1px solid {Colors.border};
     border-radius: 8px;
+    min-width: 70px;
 }}
 
 /* ── Chat view ──────────────────────────────────────────────────── */
@@ -249,10 +287,7 @@ QTextBrowser {{
 QWidget#chatInputBox {{
     background-color: {Colors.bg_input};
     border: 1px solid {Colors.border_light};
-    border-radius: 14px;
-}}
-QWidget#chatInputBox:focus-within {{
-    border-color: {Colors.accent};
+    border-radius: 16px;
 }}
 
 /* ── Sources panel ──────────────────────────────────────────────── */
@@ -266,7 +301,7 @@ QWidget#citationCard:hover {{
 }}
 QWidget#primaryCitationCard {{
     background-color: {Colors.bg_card};
-    border: 1.5px solid {Colors.accent};
+    border: 2px solid {Colors.accent};
     border-radius: 10px;
 }}
 
@@ -370,6 +405,11 @@ QProgressBar {{
 QProgressBar::chunk {{
     background-color: {Colors.accent};
     border-radius: 3px;
+}}
+
+/* ── Local Data Status section ──────────────────────────────────── */
+QWidget#localDataSection {{
+    background-color: transparent;
 }}
 """
 
