@@ -1,281 +1,223 @@
 # Local PDF RAG
 
-**Offline document Q&A with source citations — runs entirely on your machine.**
-
-Local PDF RAG is a fully private, GPU-accelerated RAG system for querying PDF collections. It ingests documents, builds a local hybrid search index, and answers questions by citing the exact page and chunk the answer came from. No cloud API, no internet required during normal use.
-
----
-
-## Screenshots
-
-The desktop app features a three-panel layout: document library on the left, chat in the centre, and source citations on the right.
-
-> After launching, import a PDF → type a question → see the answer with cited source excerpts appear in real time.
+Fully offline, high-accuracy document Q&A with source citations.
+Ask questions across 10–20 PDF files. Every answer cites the exact document,
+page, and text excerpt. No cloud API, no paid service, no internet required.
 
 ---
 
-## Hardware Target
+## Requirements
 
-| Component | Spec |
-|-----------|------|
-| RAM | 24 GB DDR5 |
-| GPU | NVIDIA RTX 3050 · 4 GB VRAM |
-| Storage | 100 GB free (Gen 5 SSD) |
-| OS | Windows 11 (primary) · Linux supported |
-
-Everything runs locally via [Ollama](https://ollama.com). No paid API keys needed.
-
----
-
-## Model Stack
-
-| Role | Model | Why |
-|------|-------|-----|
-| Answer generation | `qwen3.5:9b` | Best quality within 4 GB VRAM |
-| Fast / fallback generation | `qwen3.5:4b` | Half the VRAM, usable for dev |
-| Dense embeddings | `qwen3-embedding:4b` | Matches generation model family |
-| Reranking | `Qwen/Qwen3-Reranker-0.6B` | Lightweight cross-encoder via sentence-transformers |
-| Sparse retrieval | BM25 (built-in) | No extra service needed |
-| PDF parsing | PyMuPDF → Docling fallback | Fast path first, OCR fallback for scanned PDFs |
+| Requirement | Version |
+|---|---|
+| Python | 3.12 or 3.13 |
+| uv (package manager) | any recent |
+| Ollama | any recent |
+| RAM | 8 GB minimum, 16 GB recommended |
+| Storage | 15 GB free (models + index) |
 
 ---
 
-## Quick Start
+## One-time setup
 
-### 1 · Install Ollama and pull models
+### 1 — Install uv
 
 ```powershell
-# https://ollama.com — install the Windows app, then:
-ollama pull qwen3.5:9b
+# Windows PowerShell (run once)
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+
+Restart your terminal after installation.
+
+### 2 — Create the virtual environment
+
+```powershell
+cd D:\PDF-RAG
+uv venv .venv --python 3.12
+```
+
+### 3 — Activate the virtual environment
+
+```powershell
+# PowerShell
+.venv\Scripts\Activate.ps1
+
+# CMD
+.venv\Scripts\activate.bat
+```
+
+You will see `(.venv)` at the start of your prompt when it is active.
+
+### 4 — Install all dependencies
+
+```powershell
+# Option A — install from requirements.txt (pinned, fastest)
+uv pip install -r requirements.txt
+uv pip install -e .
+
+# Option B — install from pyproject.toml (resolves latest compatible versions)
+uv pip install -e ".[desktop,dev]"
+```
+
+### 5 — Install and start Ollama
+
+Download Ollama from https://ollama.com and install it once.
+
+Pull the required models (internet required, one time only):
+
+```powershell
+ollama pull qwen3.5:4b
 ollama pull qwen3-embedding:4b
 ```
 
-### 2 · Install the desktop app
+Optional — pull the larger, higher-quality generation model:
 
 ```powershell
-git clone https://github.com/Amartya-007/PDF-RAG.git
-cd PDF-RAG
-py -m pip install -e .[desktop]
+ollama pull qwen3.5:9b
 ```
 
-### 3 · Run
+Verify models are available:
 
 ```powershell
-# Enable Ollama and launch the desktop app
+ollama list
+```
+
+---
+
+## Running the desktop app
+
+Make sure the virtual environment is activated (`.venv\Scripts\Activate.ps1`),
+then run:
+
+```powershell
+cd D:\PDF-RAG
 $env:RAG_USE_OLLAMA = "1"
-py -m desktop.app
+python -m desktop.app
 ```
 
-Or copy `.env.example` and set `RAG_USE_OLLAMA=1` in it before launching.
-
----
-
-## CLI Usage
-
-The CLI is useful for scripting, batch ingestion, and debugging retrieval without the GUI.
+Or as a single command:
 
 ```powershell
-# Initialise the local data store
-py -m backend.app.cli init
-
-# Ingest one or more documents
-py -m backend.app.cli ingest .\report.pdf
-py -m backend.app.cli ingest .\notes.txt
-
-# Ask a question
-py -m backend.app.cli ask "What are the annual leave rules?"
-
-# Check system status (documents, chunks, Ollama readiness)
-py -m backend.app.cli status
-
-# Debug retrieval — shows ranked chunks before the answer is generated
-py -m backend.app.cli retrieve "sick leave policy" --debug
+cd D:\PDF-RAG; $env:RAG_USE_OLLAMA = "1"; .venv\Scripts\python.exe -m desktop.app
 ```
 
 ---
 
-## Environment Variables
+## Using the app
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `RAG_USE_OLLAMA` | `0` | Set to `1` to enable Ollama for generation and embeddings |
-| `RAG_OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama server URL |
-| `RAG_ACTIVE_MODEL` | `qwen3.5:9b` | Generation model name |
-| `RAG_EMBEDDING_MODEL` | `qwen3-embedding:4b` | Embedding model name |
-| `RAG_EMBEDDING_BATCH_SIZE` | `32` | Chunks per Ollama embedding request (tune for VRAM) |
-| `RAG_DATA_DIR` | `backend/data` | Where documents, indexes, and SQLite live |
-| `RAG_FORCE_OCR` | `0` | Set to `1` to always use Docling/OCR (for scanned PDFs) |
-| `RAG_ALLOW_HASH_EMBEDDINGS` | `1` | Fallback to deterministic hash embeddings when Ollama is off |
+1. Click **+ New Chat** in the sidebar.
+2. Select one or more PDF files in the file picker that opens automatically.
+3. Wait for the status bar to show `Embedding N/N chunks… (100%)`.
+4. Type a question in the input box at the bottom and press **Enter** or click **Ask**.
+5. The answer appears in the chat. Citations are shown in the right panel.
+
+**Tips**
+
+- Right-click a chat in the sidebar to rename or delete it.
+- Right-click a document under a chat to remove it.
+- Click **Import PDFs / Text** in the sidebar to add more files to an existing chat.
+- Click **Repair Stuck Imports** if a document shows `Failed` after a crash.
 
 ---
 
-## Installing Optional Extras
+## Environment variables
+
+All settings have sensible defaults. Override them by setting environment
+variables before launching the app.
 
 ```powershell
-# PDF parsing extras (Docling for OCR / scanned PDFs)
-py -m pip install -e .[pdf]
+# Model selection
+$env:RAG_ACTIVE_MODEL       = "qwen3.5:4b"    # generation model
+$env:RAG_EMBEDDING_MODEL    = "qwen3-embedding:4b"
+$env:OLLAMA_BASE_URL        = "http://localhost:11434"
 
-# FastAPI + Uvicorn HTTP server
-py -m pip install -e .[backend]
-py -m uvicorn backend.app.api.main:app --reload
+# Enable / disable Ollama (set to 0 for offline hash-embedding fallback)
+$env:RAG_USE_OLLAMA         = "1"
 
-# Reranker (Qwen3-Reranker via sentence-transformers)
-py -m pip install -e .[reranker]
+# Data directory (default: AppData\Local\Local PDF RAG\data)
+$env:RAG_DATA_DIR           = "C:\MyData\rag-data"
+
+# Retrieval tuning
+$env:RAG_DENSE_TOP_K        = "40"
+$env:RAG_SPARSE_TOP_K       = "40"
+$env:RAG_FUSION_TOP_K       = "50"
+$env:RAG_RERANK_TOP_K       = "30"
+$env:RAG_FINAL_CONTEXT_CHUNKS = "8"
+
+# Generation
+$env:RAG_TEMPERATURE        = "0.1"
+$env:RAG_EMBEDDING_BATCH_SIZE = "64"
 ```
 
 ---
 
-## Build a Windows Executable
+## Running tests
 
 ```powershell
-py -m pip install -e .[desktop]
-pyinstaller desktop/packaging/local_pdf_rag_desktop.spec
-# Output: dist/LocalPDFRAG/LocalPDFRAG.exe
+cd D:\PDF-RAG
+.venv\Scripts\Activate.ps1
+pytest backend/tests -v
 ```
 
 ---
 
-## How It Works
+## Project structure
 
 ```
-PDF / TXT / MD
-     │
-     ▼
- PdfParser
- ├─ PyMuPDF  ← used first for born-digital PDFs (fast)
- └─ Docling  ← fallback for scanned / image-only PDFs (OCR)
-     │
-     ▼
- Chunker  →  text chunks with page + metadata
-     │
-     ├──► Dense index   (Ollama qwen3-embedding, batched)
-     ├──► Sparse index  (BM25)
-     └──► OKF generator (concept mindmap, incremental)
-               │
-               ▼
-         Question
-               │
-    ┌──────────┴──────────┐
-    │                     │
-Dense retrieval    Sparse retrieval
-    │                     │
-    └──────────┬──────────┘
-               │
-        OKF concept expansion
-               │
-        Reciprocal Rank Fusion
-               │
-           Reranker
-               │
-        Context assembly
-               │
-      Ollama qwen3.5:9b
-               │
-          Answer + Citations
-         (filename · page · chunk)
-```
-
-### OKF Knowledge Layer
-
-The OKF (Open Knowledge Format) layer generates a portable Markdown mindmap from each ingested document. Each concept is a `.md` file with YAML frontmatter containing:
-
-- `id`, `title`, `slug` — stable identifiers
-- `related` — slugs of other concepts linked by sentence-level co-occurrence
-- `source_chunk_ids` — the exact chunk IDs this concept was extracted from
-- `tags`, `aliases`, `verification_status`
-
-**How concepts are extracted (v2):**
-
-1. Tokenise each chunk into sentences (not the whole chunk at once).
-2. Extract 1-3 word n-grams within sentence boundaries, filtering stopwords at start/end.
-3. Score candidates by distinct-sentence coverage × length bonus — multi-word phrases that repeat across many sentences score highest.
-4. Deduplicate: greedily drop candidates that are substrings of higher-ranked ones.
-5. Compute relations via Jaccard similarity on sentence-level co-occurrence key sets `(chunk_id, sentence_index)` — this gives genuinely distinct relation lists per concept instead of every concept linking to the same set.
-6. Concept IDs are content-derived, so incremental re-indexing skips unchanged concepts.
-
-OKF concept hits during retrieval expand back to their original source chunks before reranking, so citations always point to the real PDF page.
-
----
-
-## Project Structure
-
-```
-PDF-RAG/
+D:\PDF-RAG\
 ├── backend/
 │   ├── app/
-│   │   ├── api/              FastAPI REST endpoints
-│   │   ├── cli.py            CLI entry point
-│   │   ├── core/             Config, IDs, hashing, text utilities
-│   │   ├── database/         SQLite metadata store (documents, chunks, concepts)
-│   │   ├── generation/       Ollama client, answer prompt, extractive fallback
-│   │   ├── indexing/         Dense vector store, BM25 sparse index, embeddings
-│   │   ├── ingestion/        PDF parser, text cleaner, chunker pipeline
-│   │   ├── knowledge/        OKF concept generator, validator, importer
-│   │   ├── models.py         Shared dataclasses (Document, Chunk, Answer, Citation)
-│   │   ├── rag_service.py    Main orchestration: ingest → index → answer
-│   │   ├── retrieval/        Query analysis, fusion, reranking, context assembly
-│   │   ├── verification/     Citation and numeric fact validation
-│   │   └── workers/          Background job runner hooks
-│   └── tests/                23 stdlib unit tests (no external services needed)
+│   │   ├── domain/           # Exceptions + enums (no dependencies)
+│   │   ├── ports/            # Protocol interfaces for all replaceable components
+│   │   ├── core/             # Config, hashing, text utilities
+│   │   ├── models.py         # Domain dataclasses (Document, Chunk, Answer, …)
+│   │   ├── rag_service.py    # Main orchestrator
+│   │   ├── database/         # SQLite metadata store
+│   │   ├── ingestion/        # PDF parsing, cleaning, chunking, pipeline
+│   │   ├── indexing/         # Vector store (numpy), BM25 (bm25s), embeddings
+│   │   ├── retrieval/        # Query classifier, hybrid search, RRF, reranker
+│   │   ├── generation/       # Ollama client, extractive answerer, prompts
+│   │   ├── verification/     # Citation entailment checks
+│   │   └── knowledge/        # OKF knowledge graph (optional)
+│   └── tests/
 ├── desktop/
-│   ├── app.py                Entry point, applies QSS theme at startup
-│   ├── controller.py         Desktop ↔ RagService bridge
-│   ├── main_window.py        Three-panel PySide6 UI
-│   ├── theme.py              Design tokens and full QSS stylesheet
-│   ├── workers.py            QThreadPool worker for background tasks
-│   ├── preferences.py        Persist user settings to disk
-│   └── packaging/            PyInstaller spec for Windows .exe
+│   ├── app.py                # Entry point
+│   ├── main_window.py        # PySide6 UI
+│   ├── controller.py         # UI ↔ service bridge
+│   ├── workers.py            # Qt thread pool workers
+│   └── theme.py              # Colours and stylesheet
 ├── docs/
-│   ├── architecture.md
-│   └── RUNNING.md
-├── evaluation/               Evaluation dataset skeleton
-├── infrastructure/           Qdrant / Docker helpers
-├── scripts/
-└── pyproject.toml
+├── .venv/                    # Virtual environment (not committed)
+├── pyproject.toml
+├── requirements.txt          # Pinned dependencies
+└── README.md
 ```
 
 ---
 
-## Running the Tests
+## Troubleshooting
 
-All 23 tests run without Ollama, Docling, or any external service — the test suite uses hash embeddings and file-based fixtures.
+### App crashes with `ModuleNotFoundError`
+The virtual environment is not active. Run `.venv\Scripts\Activate.ps1` first.
+
+### `ollama: command not found`
+Ollama is not installed or not on PATH. Download from https://ollama.com.
+
+### Answers are slow (30–120 s)
+- Use a smaller model: `$env:RAG_ACTIVE_MODEL = "qwen3.5:4b"`
+- Make sure the model is loaded: `ollama list`
+- First answer after a cold start is always slower (model load time).
+
+### PDF shows `Failed` after import
+Click **Repair Stuck Imports** in the sidebar.
+If that does not help, the PDF may be scanned (image-only).
+Install OCR support:
 
 ```powershell
-py -m unittest discover -s backend/tests
+uv pip install -e ".[pdf]"
 ```
 
-Expected output:
-
-```
-Ran 23 tests in ~3s
-OK
-```
-
----
-
-## FAQ
-
-**Do I need internet?**
-No. After pulling Ollama models once, everything runs offline.
-
-**Can I use it without Ollama?**
-Yes — leave `RAG_USE_OLLAMA=0`. The app falls back to deterministic hash embeddings and an extractive (non-generative) answerer. Great for testing without a GPU.
-
-**My PDF isn't being parsed correctly.**
-Install Docling for OCR support (`pip install -e .[pdf]`) and set `RAG_FORCE_OCR=1`. Docling handles scanned and image-based PDFs. Text-native PDFs should parse fine with the default PyMuPDF path.
-
-**Ingestion is slow for large PDFs.**
-Tune `RAG_EMBEDDING_BATCH_SIZE` (default 32). Larger values use more VRAM but reduce round-trips to Ollama. Also ensure `ollama ps` shows `qwen3-embedding:4b` loaded on GPU, not CPU.
-
-**How do I add a new document?**
-Drag it into the desktop app's Import dialog, or run `py -m backend.app.cli ingest path/to/file.pdf`. The index updates incrementally — only new chunks are embedded.
-
----
-
-## Acknowledgements
-
-- [Ollama](https://ollama.com) · [Qwen3](https://huggingface.co/Qwen) · [PyMuPDF](https://pymupdf.readthedocs.io) · [Docling](https://github.com/DS4SD/docling) · [PySide6](https://doc.qt.io/qtforpython-6/)
-
----
-
-*Built by [Amartya Vishwakarma](https://github.com/Amartya-007) · Contributions welcome*
+### Embedding takes too long on first import
+The `qwen3-embedding:4b` model is 2.5 GB. First use loads it from disk.
+All subsequent re-imports of the same file skip embedding entirely
+(SQLite cache).
