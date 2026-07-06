@@ -26,6 +26,9 @@ from backend.app.models import Answer, ChatSession, Chunk, Document
 from backend.app.retrieval.fusion import reciprocal_rank_fusion
 from backend.app.retrieval.query_analysis import classify_query
 from backend.app.retrieval.reranking import Reranker
+from backend.app.generation.ollama_client import OllamaClient
+from backend.app.indexing.tree_indexer import TreeIndexer
+from backend.app.retrieval.tree_retriever import TreeRetriever
 
 
 logger = logging.getLogger(__name__)
@@ -52,6 +55,13 @@ class RagService:
         self.answerer = Answerer(self.settings)
         self.okf = OkfGenerator(self.settings.okf_dir, self.store)
         self.okf_importer = OkfImporter(self.settings.okf_dir, self.store)
+        # ── Vectorless RAG ────────────────────────────────────────────
+        self._ollama_client = OllamaClient(self.settings) if self.settings.use_ollama else None
+        self.tree_indexer = TreeIndexer(
+            trees_dir=self.settings.trees_dir,
+            ollama_client=self._ollama_client,
+        )
+        self.tree_retriever = TreeRetriever(ollama_client=self._ollama_client)
         # Chunk cache: invalidated on ingest/delete, avoids full SQLite scan per query
         self._chunk_cache: dict[str, list[Chunk]] | None = None
         self._chunk_cache_session: str | None = None
@@ -181,6 +191,19 @@ class RagService:
             self._rebuild_okf_indexes()
             logger.info("OKF generated in %.2fs", time.perf_counter() - t3)
 
+        # ── PHASE 3: vectorless tree index ────────────────────────────────
+        # Build and persist the hierarchical section tree so the LLM can
+        # navigate it at query time instead of doing vector similarity search.
+        try:
+            t_tree = time.perf_counter()
+            tree = self.tree_indexer.build(document.document_id, document.filename, pages)
+            self.tree_indexer.save(tree)
+            self.tree_indexer.save_with_raw(tree)
+            logger.info("tree index built (%d nodes) in %.2fs",
+                        len(tree.all_nodes()), time.perf_counter() - t_tree)
+        except Exception as exc:
+            logger.warning("tree indexing failed (non-fatal): %s", exc)
+
         logger.info("ingest finished: %s in %.2fs", source_path.name, time.perf_counter() - started_at)
         return ready_document
 
@@ -298,8 +321,36 @@ class RagService:
             [dense_results, sparse_results, okf_source_results],
             top_k=self.settings.fusion_top_k,
         )
-        candidates = [by_id[chunk_id] for chunk_id, _score in fused if chunk_id in by_id]
+        hybrid_candidates = [by_id[chunk_id] for chunk_id, _score in fused if chunk_id in by_id]
         context_limit = self._context_limit_for_query(query_type)
+
+        # ── Vectorless tree retrieval (primary path) ──────────────────────
+        # When Ollama is enabled and tree search is on, let llama3.2 navigate
+        # the document hierarchy directly instead of relying on vector
+        # similarity. Tree chunks come first; hybrid fills any gaps.
+        tree_chunks: list[Chunk] = []
+        if self.settings.use_tree_search and self._ollama_client is not None:
+            documents = self.store.list_documents(self.session_id)
+            trees = []
+            for doc in documents:
+                t = self.tree_indexer.load_with_raw(doc.document_id)
+                if t is not None:
+                    trees.append(t)
+            if trees:
+                try:
+                    tree_chunks = self.tree_retriever.retrieve(search_question, trees)
+                    logger.info("tree retrieval: %d chunks from %d trees", len(tree_chunks), len(trees))
+                except Exception as exc:
+                    logger.warning("tree retrieval failed (non-fatal): %s", exc)
+
+        # Merge: tree chunks first, then hybrid without duplicates
+        seen_ids = {c.chunk_id for c in tree_chunks}
+        merged = list(tree_chunks)
+        for chunk in hybrid_candidates:
+            if chunk.chunk_id not in seen_ids:
+                merged.append(chunk)
+                seen_ids.add(chunk.chunk_id)
+        candidates = merged
 
         if fast_fact_query:
             selected = self._rank_fast_fact_candidates(question, chunks, candidates)[:context_limit]

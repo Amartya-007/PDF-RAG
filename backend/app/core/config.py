@@ -32,6 +32,7 @@ class Settings:
     use_ollama: bool
     allow_hash_embeddings: bool
     force_ocr: bool
+    use_tree_search: bool
 
     @property
     def documents_dir(self) -> Path:
@@ -44,6 +45,10 @@ class Settings:
     @property
     def okf_dir(self) -> Path:
         return self.data_dir / "knowledge"
+
+    @property
+    def trees_dir(self) -> Path:
+        return self.data_dir / "trees"
 
     @property
     def sqlite_path(self) -> Path | str:
@@ -59,10 +64,10 @@ def get_settings() -> Settings:
         data_dir=data_dir,
         sqlite_path_value=sqlite_path,
         ollama_base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
-        generation_model=os.getenv("RAG_GENERATION_MODEL", "qwen3.5:9b"),
-        development_model=os.getenv("RAG_DEVELOPMENT_MODEL", "qwen3.5:4b"),
-        active_model=os.getenv("RAG_ACTIVE_MODEL", os.getenv("RAG_DEVELOPMENT_MODEL", "qwen3.5:4b")),
-        embedding_model=os.getenv("RAG_EMBEDDING_MODEL", "qwen3-embedding:4b"),
+        generation_model=os.getenv("RAG_GENERATION_MODEL", "llama3.2"),
+        development_model=os.getenv("RAG_DEVELOPMENT_MODEL", "llama3.2"),
+        active_model=os.getenv("RAG_ACTIVE_MODEL", os.getenv("RAG_DEVELOPMENT_MODEL", "llama3.2")),
+        embedding_model=os.getenv("RAG_EMBEDDING_MODEL", "nomic-embed-text"),
         reranker_model=os.getenv("RAG_RERANKER_MODEL", "Qwen/Qwen3-Reranker-0.6B"),
         dense_top_k=int(os.getenv("RAG_DENSE_TOP_K", "40")),
         sparse_top_k=int(os.getenv("RAG_SPARSE_TOP_K", "40")),
@@ -77,6 +82,7 @@ def get_settings() -> Settings:
         use_ollama=_bool_env("RAG_USE_OLLAMA", False),
         allow_hash_embeddings=_bool_env("RAG_ALLOW_HASH_EMBEDDINGS", True),
         force_ocr=_bool_env("RAG_FORCE_OCR", False),
+        use_tree_search=_bool_env("RAG_USE_TREE_SEARCH", True),
     )
 
 
@@ -86,5 +92,6 @@ def ensure_data_dirs(settings: Settings) -> None:
         settings.documents_dir,
         settings.indexes_dir,
         settings.okf_dir,
+        settings.trees_dir,
     ]:
         path.mkdir(parents=True, exist_ok=True)
