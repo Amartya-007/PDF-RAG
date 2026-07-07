@@ -1,11 +1,51 @@
+# Python
 __pycache__/
 *.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Testing and tooling
 .pytest_cache/
 .ruff_cache/
-*.egg-info/
-.env
-backend/data/
+.mypy_cache/
+.coverage
+htmlcov/
 backend/.test-tmp/
+
+# Application data
+backend/data/
+*.sqlite3
+*.db
+
+# Build output
 build/
 dist/
-*.sqlite3
+
+# IDE and AI tools
+.vscode/
+.idea/
+.kiro/
+.agents/
+.fallow/
+.qodo/
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs and temporary files
+*.log
+*.tmp
+*.temp
