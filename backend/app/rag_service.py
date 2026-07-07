@@ -28,6 +28,9 @@ from backend.app.retrieval.context_builder import build_evidence_block
 from backend.app.retrieval.fusion import reciprocal_rank_fusion
 from backend.app.retrieval.query_classifier import QueryClassifier
 from backend.app.retrieval.reranking import Reranker
+from backend.app.generation.ollama_client import OllamaClient
+from backend.app.indexing.tree_indexer import TreeIndexer
+from backend.app.retrieval.tree_retriever import TreeRetriever
 
 
 logger = logging.getLogger(__name__)
@@ -57,24 +60,15 @@ class RagService:
         self.answerer = Answerer(self.settings)
         self.okf = OkfGenerator(self.settings.okf_dir, self.store)
         self.okf_importer = OkfImporter(self.settings.okf_dir, self.store)
-
-        # Dedicated pipeline — single-responsibility ingest orchestrator
-        self._pipeline = IngestionPipeline(
-            store=self.store,
-            parser=PdfParser(force_ocr=self.settings.force_ocr),
-            chunker=Chunker(),
-            embedder=self.embedder,
-            vectors=self.vectors,
-            sparse=self.sparse,
-            documents_dir=self.settings.documents_dir,
-            embedding_batch_size=self.settings.embedding_batch_size,
+        # ── Vectorless RAG ────────────────────────────────────────────
+        self._ollama_client = OllamaClient(self.settings) if self.settings.use_ollama else None
+        self.tree_indexer = TreeIndexer(
+            trees_dir=self.settings.trees_dir,
+            ollama_client=self._ollama_client,
         )
-
-        # Single source of truth for query classification
-        self._classifier = QueryClassifier()
-
-        # Session-scoped chunk cache — invalidated on ingest/delete
-        self._chunk_cache: list[Chunk] | None = None
+        self.tree_retriever = TreeRetriever(ollama_client=self._ollama_client)
+        # Chunk cache: invalidated on ingest/delete, avoids full SQLite scan per query
+        self._chunk_cache: dict[str, list[Chunk]] | None = None
         self._chunk_cache_session: str | None = None
 
     def list_sessions(self) -> list[ChatSession]:
@@ -135,7 +129,64 @@ class RagService:
                 self._rebuild_okf_indexes()
                 logger.info("OKF generated in %.2fs", time.perf_counter() - t0)
 
-        return ready_doc
+        # ── PHASE 3: vectorless tree index ────────────────────────────────
+        # Build and persist the hierarchical section tree so the LLM can
+        # navigate it at query time instead of doing vector similarity search.
+        try:
+            t_tree = time.perf_counter()
+            tree = self.tree_indexer.build(document.document_id, document.filename, pages)
+            self.tree_indexer.save(tree)
+            self.tree_indexer.save_with_raw(tree)
+            logger.info("tree index built (%d nodes) in %.2fs",
+                        len(tree.all_nodes()), time.perf_counter() - t_tree)
+        except Exception as exc:
+            logger.warning("tree indexing failed (non-fatal): %s", exc)
+
+        logger.info("ingest finished: %s in %.2fs", source_path.name, time.perf_counter() - started_at)
+        return ready_document
+
+    def _index_chunks_with_progress(
+        self,
+        chunks: list[Chunk],
+        progress_callback: object = None,
+    ) -> None:
+        """Embed chunks that aren't already in the vector store.
+
+        Reports per-batch progress so the UI can show a live counter.
+        Uses the largest feasible batch size to minimise Ollama round-trips.
+        """
+        existing = self.vectors.existing_ids()
+        new_chunks = [c for c in chunks if c.chunk_id not in existing]
+        if not new_chunks:
+            logger.info("embedding skipped — all %d chunks already cached", len(chunks))
+            return
+
+        total = len(new_chunks)
+        batch_size = max(16, self.settings.embedding_batch_size)
+        done = 0
+
+        # Import here to keep the top-level import clean
+        from backend.app.core.text import batched as _batched
+
+        for batch in _batched(new_chunks, batch_size):
+            texts = [c.text for c in batch]
+            try:
+                vectors = self.embedder.embed(texts)
+            except Exception as exc:
+                logger.error("embedding batch failed: %s — skipping", exc)
+                done += len(batch)
+                continue
+
+            self.vectors.upsert_many(
+                {c.chunk_id: v for c, v in zip(batch, vectors)}
+            )
+            done += len(batch)
+            if progress_callback:
+                progress_callback(
+                    done,
+                    total,
+                    f"Embedding {done}/{total} chunks…",
+                )
 
     def repair_unready_documents(self, build_okf: bool = True) -> list[Document]:
         repaired: list[Document] = []
@@ -210,10 +261,38 @@ class RagService:
             [dense_results, sparse_results, okf_source_results],
             top_k=self.settings.fusion_top_k,
         )
-        candidates = [by_id[cid] for cid, _ in fused if cid in by_id]
-        context_limit = self._context_limit_for_query(query_type.value)
+        hybrid_candidates = [by_id[chunk_id] for chunk_id, _score in fused if chunk_id in by_id]
+        context_limit = self._context_limit_for_query(query_type)
 
-        if is_fast_fact:
+        # ── Vectorless tree retrieval (primary path) ──────────────────────
+        # When Ollama is enabled and tree search is on, let llama3.2 navigate
+        # the document hierarchy directly instead of relying on vector
+        # similarity. Tree chunks come first; hybrid fills any gaps.
+        tree_chunks: list[Chunk] = []
+        if self.settings.use_tree_search and self._ollama_client is not None:
+            documents = self.store.list_documents(self.session_id)
+            trees = []
+            for doc in documents:
+                t = self.tree_indexer.load_with_raw(doc.document_id)
+                if t is not None:
+                    trees.append(t)
+            if trees:
+                try:
+                    tree_chunks = self.tree_retriever.retrieve(search_question, trees)
+                    logger.info("tree retrieval: %d chunks from %d trees", len(tree_chunks), len(trees))
+                except Exception as exc:
+                    logger.warning("tree retrieval failed (non-fatal): %s", exc)
+
+        # Merge: tree chunks first, then hybrid without duplicates
+        seen_ids = {c.chunk_id for c in tree_chunks}
+        merged = list(tree_chunks)
+        for chunk in hybrid_candidates:
+            if chunk.chunk_id not in seen_ids:
+                merged.append(chunk)
+                seen_ids.add(chunk.chunk_id)
+        candidates = merged
+
+        if fast_fact_query:
             selected = self._rank_fast_fact_candidates(question, chunks, candidates)[:context_limit]
         elif is_topic:
             selected = self._rank_topic_candidates(normalised, chunks, candidates)[:context_limit]

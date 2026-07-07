@@ -333,7 +333,7 @@ class MainWindow(QMainWindow):
         hbox.setSpacing(10)
 
         # Logo + name
-        logo = _label("📄", 18)
+        logo = _label(18)
         app_name = _label("Local PDF RAG", 15, bold=True)
         app_name.setObjectName("appName")
         version = _label("v1.2.0", 10, color=Colors.text_muted)
@@ -346,7 +346,7 @@ class MainWindow(QMainWindow):
         hbox.addSpacing(10)
 
         # Status pill
-        self._header_status = QLabel("●  All good")
+        self._header_status = QLabel(" All good")
         self._header_status.setObjectName("statusPill")
         hbox.addWidget(self._header_status)
         hbox.addStretch(1)
@@ -372,7 +372,7 @@ class MainWindow(QMainWindow):
         settings_btn.clicked.connect(self.show_settings)
         hbox.addWidget(settings_btn)
 
-        theme_btn = QPushButton("🌙  Theme")
+        theme_btn = QPushButton("Theme")
         theme_btn.setObjectName("headerBtn")
         theme_btn.setFixedHeight(34)
         hbox.addWidget(theme_btn)
@@ -393,11 +393,11 @@ class MainWindow(QMainWindow):
         # ── New Chat + Import PDFs ────────────────────────────────────
         top_btns = QHBoxLayout()
         top_btns.setSpacing(8)
-        new_chat = QPushButton("＋  New Chat")
+        new_chat = QPushButton("＋ New Chat")
         new_chat.setObjectName("primaryBtn")
         new_chat.setFixedHeight(40)
         new_chat.clicked.connect(self._new_chat)
-        import_btn = QPushButton("⬆  Import PDFs")
+        import_btn = QPushButton(" Import PDFs")
         import_btn.setObjectName("ghostBtn")
         import_btn.setFixedHeight(40)
         import_btn.clicked.connect(self.import_documents)
@@ -442,7 +442,7 @@ class MainWindow(QMainWindow):
 
         status_header = QHBoxLayout()
         status_header.setSpacing(6)
-        status_header.addWidget(_label("📊", 13))
+        status_header.addWidget(_label(13))
         status_header.addWidget(_label("Local Data Status", 12, bold=True, color=Colors.text_muted))
         status_header.addStretch(1)
         status_vbox.addLayout(status_header)
