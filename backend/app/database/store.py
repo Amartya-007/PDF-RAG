@@ -89,6 +89,40 @@ class MetadataStore:
                     path text,
                     created_at text not null default current_timestamp
                 );
+
+                create table if not exists nodes (
+                    node_id      text primary key,
+                    document_id  text not null references documents(document_id),
+                    parent_id    text,
+                    node_type    text not null,
+                    title        text,
+                    text         text not null,
+                    page_start   integer not null,
+                    page_end     integer not null,
+                    depth        integer not null,
+                    position     integer not null,
+                    heading_path text not null
+                );
+
+                create index if not exists idx_nodes_document on nodes(document_id);
+                create index if not exists idx_nodes_parent   on nodes(parent_id);
+                create index if not exists idx_nodes_depth    on nodes(depth);
+
+                create virtual table if not exists nodes_fts
+                using fts5(node_id unindexed, text, title, content=nodes, content_rowid=rowid);
+
+                create table if not exists ingestion_jobs (
+                    job_id           text primary key,
+                    document_id      text not null references documents(document_id),
+                    session_id       text not null,
+                    status           text not null default 'queued',
+                    progress_message text not null default '' check(length(progress_message) <= 500),
+                    created_at       text not null default current_timestamp,
+                    updated_at       text not null default current_timestamp
+                );
+
+                create index if not exists idx_jobs_document on ingestion_jobs(document_id);
+                create index if not exists idx_jobs_status   on ingestion_jobs(status);
                 """
             )
             self._migrate_documents_sha_unique(conn)
@@ -136,7 +170,7 @@ class MetadataStore:
             )
 
     def delete_session(self, session_id: str) -> None:
-        """Delete a session and all its documents and chunks."""
+        """Delete a session and all its documents, chunks, and nodes."""
         with self.connect() as conn:
             doc_rows = conn.execute(
                 "select document_id from documents where session_id = ?",
@@ -146,11 +180,12 @@ class MetadataStore:
             if doc_ids:
                 marks = ",".join("?" for _ in doc_ids)
                 conn.execute(f"delete from chunks where document_id in ({marks})", doc_ids)
+                conn.execute(f"delete from nodes where document_id in ({marks})", doc_ids)
             conn.execute("delete from documents where session_id = ?", (session_id,))
             conn.execute("delete from sessions where session_id = ?", (session_id,))
 
     def delete_document(self, document_id: str) -> list[str]:
-        """Delete a single document and its chunks. Returns list of deleted chunk_ids."""
+        """Delete a single document and its chunks and nodes. Returns list of deleted chunk_ids."""
         with self.connect() as conn:
             chunk_rows = conn.execute(
                 "select chunk_id from chunks where document_id = ?",
@@ -158,6 +193,7 @@ class MetadataStore:
             ).fetchall()
             chunk_ids = [row["chunk_id"] for row in chunk_rows]
             conn.execute("delete from chunks where document_id = ?", (document_id,))
+            conn.execute("delete from nodes where document_id = ?", (document_id,))
             conn.execute("delete from documents where document_id = ?", (document_id,))
         return chunk_ids
 
