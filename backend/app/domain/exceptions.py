@@ -87,3 +87,13 @@ class SessionNotFoundError(StorageError):
 
 class IndexCorruptionError(RagError):
     """Raised when a persisted index file is unreadable or structurally invalid."""
+
+
+# ── Answer generation ──────────────────────────────────────────────────────
+
+class AnswerGenerationError(RagError):
+    """Raised when the LLM answerer fails to produce a valid response."""
+
+
+class InsufficientEvidenceError(RetrievalError):
+    """Raised by ConfidenceGate when retrieved nodes don't meet the quality bar."""
