@@ -20,17 +20,10 @@ class Settings:
     generation_model: str
     development_model: str
     active_model: str
-    embedding_model: str
-    reranker_model: str
-    dense_top_k: int
     sparse_top_k: int
-    fusion_top_k: int
-    rerank_top_k: int
     final_context_chunks: int
     temperature: float
-    embedding_batch_size: int
     use_ollama: bool
-    allow_hash_embeddings: bool
     force_ocr: bool
     use_tree_search: bool
 
@@ -67,20 +60,10 @@ def get_settings() -> Settings:
         generation_model=os.getenv("RAG_GENERATION_MODEL", "llama3.2"),
         development_model=os.getenv("RAG_DEVELOPMENT_MODEL", "llama3.2"),
         active_model=os.getenv("RAG_ACTIVE_MODEL", os.getenv("RAG_DEVELOPMENT_MODEL", "llama3.2")),
-        embedding_model=os.getenv("RAG_EMBEDDING_MODEL", "nomic-embed-text"),
-        reranker_model=os.getenv("RAG_RERANKER_MODEL", "Qwen/Qwen3-Reranker-0.6B"),
-        dense_top_k=int(os.getenv("RAG_DENSE_TOP_K", "40")),
         sparse_top_k=int(os.getenv("RAG_SPARSE_TOP_K", "40")),
-        fusion_top_k=int(os.getenv("RAG_FUSION_TOP_K", "50")),
-        rerank_top_k=int(os.getenv("RAG_RERANK_TOP_K", "30")),
         final_context_chunks=int(os.getenv("RAG_FINAL_CONTEXT_CHUNKS", "8")),
         temperature=float(os.getenv("RAG_TEMPERATURE", "0.1")),
-        # Large batch: send up to 64 chunks per Ollama call.
-        # Ollama batches them internally — one model load, many embeddings.
-        # Previously 32 was used but Ollama handles larger batches fine.
-        embedding_batch_size=int(os.getenv("RAG_EMBEDDING_BATCH_SIZE", "64")),
         use_ollama=_bool_env("RAG_USE_OLLAMA", False),
-        allow_hash_embeddings=_bool_env("RAG_ALLOW_HASH_EMBEDDINGS", True),
         force_ocr=_bool_env("RAG_FORCE_OCR", False),
         use_tree_search=_bool_env("RAG_USE_TREE_SEARCH", True),
     )

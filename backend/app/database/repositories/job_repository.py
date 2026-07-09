@@ -39,6 +39,9 @@ class JobRepository:
             )
         return job
 
+    def create_job(self, job: IngestionJob) -> IngestionJob:
+        return self.create(job)
+
     def get(self, job_id: str) -> IngestionJob:
         """Fetch a job by ID.  Raises DocumentNotFoundError when absent."""
         with self._connect() as conn:
@@ -48,6 +51,9 @@ class JobRepository:
         if row is None:
             raise DocumentNotFoundError(job_id)
         return self._from_row(row)
+
+    def get_job(self, job_id: str) -> IngestionJob:
+        return self.get(job_id)
 
     def update_status(
         self, job_id: str, status: str, message: str = ""
@@ -63,6 +69,9 @@ class JobRepository:
                 (status, message[:500], _now(), job_id),
             )
 
+    def update_job_status(self, job_id: str, status: str, message: str = "") -> None:
+        self.update_status(job_id, status, message)
+
     def list_for_document(self, document_id: str) -> list[IngestionJob]:
         with self._connect() as conn:
             rows = conn.execute(
@@ -70,6 +79,9 @@ class JobRepository:
                 (document_id,),
             ).fetchall()
         return [self._from_row(r) for r in rows]
+
+    def list_jobs_for_document(self, document_id: str) -> list[IngestionJob]:
+        return self.list_for_document(document_id)
 
     def latest_for_document(self, document_id: str) -> IngestionJob | None:
         jobs = self.list_for_document(document_id)

@@ -11,8 +11,10 @@ default to ``None`` / ``False`` / ``0.0``.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+import importlib
 from pathlib import Path
+from types import ModuleType
 
 from backend.app.ingestion.parser.pdf_parser import PageText
 
@@ -60,14 +62,26 @@ class LayoutParser:
 
     def _parse_pdf(self, path: Path) -> list[LayoutNode]:
         try:
-            import pymupdf  # type: ignore
-            return self._parse_with_pymupdf(path, pymupdf)
+            pymupdf = self._load_pymupdf()
+            nodes = self._parse_with_pymupdf(path, pymupdf)
+            if nodes:
+                return nodes
         except ImportError:
             pass
         # Fallback: use existing PdfParser (text only)
         from backend.app.ingestion.parser.pdf_parser import PdfParser
         pages = PdfParser().parse(path)
         return self._pages_to_layout_nodes(pages)
+
+    @staticmethod
+    def _load_pymupdf() -> ModuleType:
+        errors: list[Exception] = []
+        for module_name in ("pymupdf", "fitz"):
+            try:
+                return importlib.import_module(module_name)
+            except ImportError as exc:
+                errors.append(exc)
+        raise errors[-1] if errors else ImportError("PyMuPDF is unavailable")
 
     def _parse_with_pymupdf(self, path: Path, pymupdf) -> list[LayoutNode]:  # type: ignore[no-untyped-def]
         nodes: list[LayoutNode] = []
@@ -81,7 +95,7 @@ class LayoutParser:
                 for block in block_dict.get("blocks", []):
                     if block.get("type") != 0:   # type 0 = text block
                         continue
-                    block_text, font_size, font_name, is_bold, bbox, indent = (
+                    block_text, font_size, font_name, is_bold, bbox, indent, line_spacing = (
                         self._extract_block_info(block)
                     )
                     if not block_text.strip():
@@ -94,7 +108,7 @@ class LayoutParser:
                         is_bold=is_bold,
                         bbox=bbox,
                         indent=indent,
-                        line_spacing=0.0,
+                        line_spacing=line_spacing,
                     ))
         finally:
             doc.close()
@@ -102,7 +116,7 @@ class LayoutParser:
 
     @staticmethod
     def _extract_block_info(block: dict) -> tuple[
-        str, float | None, str | None, bool, tuple | None, float
+        str, float | None, str | None, bool, tuple | None, float, float
     ]:
         """Pull text and dominant font attributes from a PyMuPDF block dict."""
         lines = block.get("lines", [])
@@ -110,8 +124,12 @@ class LayoutParser:
         sizes: list[float] = []
         fonts: list[str] = []
         bold_flags: list[bool] = []
+        line_tops: list[float] = []
 
         for line in lines:
+            raw_line_bbox = line.get("bbox")
+            if raw_line_bbox and len(raw_line_bbox) == 4:
+                line_tops.append(float(raw_line_bbox[1]))
             for span in line.get("spans", []):
                 t = span.get("text", "")
                 if t:
@@ -130,8 +148,21 @@ class LayoutParser:
         raw_bbox = block.get("bbox")
         bbox = tuple(raw_bbox) if raw_bbox and len(raw_bbox) == 4 else None
         indent = float(raw_bbox[0]) if raw_bbox else 0.0
+        line_spacing = LayoutParser._line_spacing(line_tops)
 
-        return text, font_size, font_name, is_bold, bbox, indent
+        return text, font_size, font_name, is_bold, bbox, indent, line_spacing
+
+    @staticmethod
+    def _line_spacing(line_tops: list[float]) -> float:
+        if len(line_tops) < 2:
+            return 0.0
+        ordered = sorted(line_tops)
+        gaps = [
+            later - earlier
+            for earlier, later in zip(ordered, ordered[1:])
+            if later > earlier
+        ]
+        return sum(gaps) / len(gaps) if gaps else 0.0
 
     # ── Plain text / Markdown path ─────────────────────────────────────────
 

@@ -52,6 +52,13 @@ def _split_at_sentences(text: str, max_words: int) -> list[str]:
 
     for sentence in sentences:
         w = _word_count(sentence)
+        if w > max_words:
+            if current:
+                chunks.append(" ".join(current))
+                current = []
+                current_words = 0
+            chunks.extend(_split_words(sentence, max_words))
+            continue
         if current_words + w > max_words and current:
             chunks.append(" ".join(current))
             current = []
@@ -62,6 +69,14 @@ def _split_at_sentences(text: str, max_words: int) -> list[str]:
     if current:
         chunks.append(" ".join(current))
     return [c for c in chunks if c.strip()]
+
+
+def _split_words(text: str, max_words: int) -> list[str]:
+    words = text.split()
+    return [
+        " ".join(words[i : i + max_words])
+        for i in range(0, len(words), max_words)
+    ]
 
 
 @dataclass

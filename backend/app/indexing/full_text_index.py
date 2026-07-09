@@ -36,6 +36,7 @@ class FTS5Index:
     def __init__(self, connection_factory: Callable[[], sqlite3.Connection]) -> None:
         self._connect = connection_factory
         self._consistent = True
+        self._indexed_rowids: set[int] = set()
         self._fts5_available = self._probe_fts5()
         if not self._fts5_available:
             logger.warning(
@@ -50,14 +51,18 @@ class FTS5Index:
         """Insert or update a node in the FTS5 index."""
         try:
             with self._connect() as conn:
-                # FTS5 content= tables require explicit delete + insert for updates
+                rowid = self._node_rowid(conn, node.id)
+                if rowid is None:
+                    raise sqlite3.IntegrityError(
+                        f"Cannot index missing node row: {node.id}"
+                    )
+                if rowid in self._indexed_rowids:
+                    self._delete_fts_row(conn, rowid, node.id, node.text, node.title or "")
                 conn.execute(
-                    "DELETE FROM nodes_fts WHERE node_id = ?", (node.id,)
+                    "INSERT INTO nodes_fts(rowid, node_id, text, title) VALUES (?, ?, ?, ?)",
+                    (rowid, node.id, node.text, node.title or ""),
                 )
-                conn.execute(
-                    "INSERT INTO nodes_fts(node_id, text, title) VALUES (?, ?, ?)",
-                    (node.id, node.text, node.title or ""),
-                )
+                self._indexed_rowids.add(rowid)
         except sqlite3.Error as exc:
             self._consistent = False
             logger.warning(
@@ -69,9 +74,19 @@ class FTS5Index:
         """Remove a node from the FTS5 index."""
         try:
             with self._connect() as conn:
-                conn.execute(
-                    "DELETE FROM nodes_fts WHERE node_id = ?", (node_id,)
-                )
+                row = conn.execute(
+                    "SELECT rowid, text, title FROM nodes WHERE node_id = ?",
+                    (node_id,),
+                ).fetchone()
+                if row is not None and int(row["rowid"]) in self._indexed_rowids:
+                    self._delete_fts_row(
+                        conn,
+                        int(row["rowid"]),
+                        node_id,
+                        row["text"],
+                        row["title"] or "",
+                    )
+                    self._indexed_rowids.discard(int(row["rowid"]))
         except sqlite3.Error as exc:
             self._consistent = False
             logger.warning("FTS5 delete failed for node %s: %s", node_id, exc)
@@ -80,11 +95,31 @@ class FTS5Index:
         """Wipe and rebuild the entire FTS5 index from *nodes*."""
         try:
             with self._connect() as conn:
-                conn.execute("DELETE FROM nodes_fts")
-                conn.executemany(
-                    "INSERT INTO nodes_fts(node_id, text, title) VALUES (?, ?, ?)",
-                    [(n.id, n.text, n.title or "") for n in nodes],
-                )
+                for rowid in list(self._indexed_rowids):
+                    row = conn.execute(
+                        "SELECT node_id, text, title FROM nodes WHERE rowid = ?",
+                        (rowid,),
+                    ).fetchone()
+                    if row is not None:
+                        self._delete_fts_row(
+                            conn,
+                            rowid,
+                            row["node_id"],
+                            row["text"],
+                            row["title"] or "",
+                        )
+                self._indexed_rowids.clear()
+                for node in nodes:
+                    rowid = self._node_rowid(conn, node.id)
+                    if rowid is None:
+                        raise sqlite3.IntegrityError(
+                            f"Cannot rebuild missing node row: {node.id}"
+                        )
+                    conn.execute(
+                        "INSERT INTO nodes_fts(rowid, node_id, text, title) VALUES (?, ?, ?, ?)",
+                        (rowid, node.id, node.text, node.title or ""),
+                    )
+                    self._indexed_rowids.add(rowid)
             self._consistent = True
         except sqlite3.Error as exc:
             self._consistent = False
@@ -136,8 +171,6 @@ class FTS5Index:
         conditions = " OR ".join(
             "n.text LIKE ? OR n.title LIKE ?" for _ in terms
         )
-        params = [f"%{t}%", f"%{t}%"] + [f"%{t}%", f"%{t}%"] * (len(terms) - 1)
-        # Flatten: each term needs two params (text + title)
         flat_params = []
         for t in terms:
             flat_params.extend([f"%{t}%", f"%{t}%"])
@@ -165,6 +198,30 @@ class FTS5Index:
             return True
         except sqlite3.OperationalError:
             return False
+
+    @staticmethod
+    def _node_rowid(conn: sqlite3.Connection, node_id: str) -> int | None:
+        row = conn.execute(
+            "SELECT rowid FROM nodes WHERE node_id = ?",
+            (node_id,),
+        ).fetchone()
+        return int(row["rowid"]) if row is not None else None
+
+    @staticmethod
+    def _delete_fts_row(
+        conn: sqlite3.Connection,
+        rowid: int,
+        node_id: str,
+        text: str,
+        title: str,
+    ) -> None:
+        conn.execute(
+            """
+            INSERT INTO nodes_fts(nodes_fts, rowid, node_id, text, title)
+            VALUES('delete', ?, ?, ?, ?)
+            """,
+            (rowid, node_id, text, title),
+        )
 
     @staticmethod
     def _sanitise_fts5_query(query: str) -> str:

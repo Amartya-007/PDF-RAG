@@ -29,49 +29,6 @@ class DocumentParser(Protocol):
         ...
 
 
-# ── Embedding ──────────────────────────────────────────────────────────────
-
-@runtime_checkable
-class EmbeddingProvider(Protocol):
-    """Converts text into dense float vectors."""
-
-    def embed(self, texts: list[str]) -> list[list[float]]:
-        """Return one embedding vector per input text.
-
-        The returned list has the same length and order as *texts*.
-
-        Raises:
-            EmbeddingError: when the provider is unavailable or returns malformed output.
-        """
-        ...
-
-
-# ── Vector index ───────────────────────────────────────────────────────────
-
-@runtime_checkable
-class VectorIndex(Protocol):
-    """Persistent store of dense embedding vectors."""
-
-    def upsert_many(self, vectors: dict[str, list[float]]) -> None:
-        """Insert or overwrite vectors keyed by chunk ID."""
-        ...
-
-    def search(self, query_vector: list[float], top_k: int) -> list[tuple[str, float]]:
-        """Return the *top_k* closest chunk IDs with their cosine similarity scores."""
-        ...
-
-    def delete_missing(self, keep_ids: set[str]) -> None:
-        """Remove all stored vectors whose IDs are NOT in *keep_ids*."""
-        ...
-
-    def existing_ids(self) -> set[str]:
-        """Return the set of chunk IDs currently stored."""
-        ...
-
-    def __len__(self) -> int:
-        ...
-
-
 # ── Keyword index ──────────────────────────────────────────────────────────
 
 @runtime_checkable
@@ -132,23 +89,3 @@ class LLMProvider(Protocol):
         ...
 
 
-# ── Embedding cache ────────────────────────────────────────────────────────
-
-@runtime_checkable
-class EmbeddingCache(Protocol):
-    """Persistent key-value store mapping text SHA-256 → float vector."""
-
-    def get_many(self, keys: list[str]) -> dict[str, list[float]]:
-        """Return cached embeddings for the given SHA-256 keys.
-
-        Missing keys are simply absent from the returned dict.
-        """
-        ...
-
-    def set_many(self, entries: dict[str, list[float]]) -> None:
-        """Persist *entries* (SHA-256 → vector) to the cache."""
-        ...
-
-    def close(self) -> None:
-        """Release any held resources (file handles, DB connections)."""
-        ...

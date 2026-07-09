@@ -10,7 +10,7 @@ Signal weights (summed; threshold 0.5 to be classified as heading):
   Font size > 120% body    0.6
   Bold font flag           0.5
   Short line (< 12 words)  0.2
-  Blank line above/below   0.15
+  Blank line above/below   0.25
   Low indent               0.1
 """
 from __future__ import annotations
@@ -103,11 +103,15 @@ class HeadingDetector:
         if len(words) <= 12 and not _SENTENCE_END.search(text):
             score += 0.20
 
-        # 6. Subtract for long paragraphs (unlikely to be headings)
+        # 6. Large spacing is a useful plain-text/Docling proxy for blank lines.
+        if node.line_spacing >= 18.0:
+            score += 0.25
+
+        # 7. Subtract for long paragraphs (unlikely to be headings)
         if len(words) > 20:
             score -= 0.40
 
-        # 7. Low indent (top-level sections usually start at left margin)
+        # 8. Low indent (top-level sections usually start at left margin)
         if node.indent < 10.0:
             score += 0.10
 

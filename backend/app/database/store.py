@@ -4,6 +4,13 @@ import json
 import sqlite3
 from pathlib import Path
 
+from backend.app.database.repositories import (
+    AnswerRepository,
+    DocumentRepository,
+    JobRepository,
+    NodeRepository,
+    SessionRepository,
+)
 from backend.app.knowledge.okf import OkfConcept
 from backend.app.models import ChatSession, Chunk, Document
 
@@ -16,6 +23,11 @@ class MetadataStore:
     def __init__(self, path: Path | str) -> None:
         self.path = path
         self._memory_connection: sqlite3.Connection | None = None
+        self.answers = AnswerRepository(self.connect)
+        self.documents = DocumentRepository(self.connect)
+        self.jobs = JobRepository(self.connect)
+        self.nodes = NodeRepository(self.connect)
+        self.sessions = SessionRepository(self.connect)
         if path != ":memory:":
             assert isinstance(path, Path)
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -31,6 +43,10 @@ class MetadataStore:
         conn.execute("pragma journal_mode=OFF")
         conn.execute("pragma synchronous=NORMAL")
         return conn
+
+    @property
+    def connection_factory(self):
+        return self.connect
 
     def close(self) -> None:
         if self._memory_connection is not None:
@@ -123,6 +139,31 @@ class MetadataStore:
 
                 create index if not exists idx_jobs_document on ingestion_jobs(document_id);
                 create index if not exists idx_jobs_status   on ingestion_jobs(status);
+
+                create table if not exists answers (
+                    answer_id  text primary key,
+                    session_id text not null,
+                    question   text not null,
+                    answer     text not null,
+                    answerable integer not null,
+                    debug      text not null default '{}',
+                    created_at text not null default current_timestamp
+                );
+
+                create table if not exists answer_citations (
+                    answer_id   text not null references answers(answer_id) on delete cascade,
+                    source_id   text not null,
+                    document_id text not null,
+                    filename    text not null,
+                    page_start  integer not null,
+                    page_end    integer not null,
+                    chunk_id    text not null,
+                    excerpt     text not null,
+                    position    integer not null,
+                    primary key(answer_id, position)
+                );
+
+                create index if not exists idx_answers_session on answers(session_id);
                 """
             )
             self._migrate_documents_sha_unique(conn)
@@ -130,132 +171,65 @@ class MetadataStore:
             self._ensure_concept_columns(conn)
 
     def ensure_session(self, session_id: str, title: str) -> ChatSession:
-        with self.connect() as conn:
-            conn.execute(
-                """
-                insert into sessions(session_id, title)
-                values(?, ?)
-                on conflict(session_id) do update set title=excluded.title
-                """,
-                (session_id, title),
-            )
-            row = conn.execute(
-                "select * from sessions where session_id = ?",
-                (session_id,),
-            ).fetchone()
-        return self._session_from_row(row)
+        return self.sessions.ensure_session(session_id, title)
 
     def create_session(self, session_id: str, title: str) -> ChatSession:
-        with self.connect() as conn:
-            conn.execute(
-                "insert into sessions(session_id, title) values(?, ?)",
-                (session_id, title),
-            )
-            row = conn.execute(
-                "select * from sessions where session_id = ?",
-                (session_id,),
-            ).fetchone()
-        return self._session_from_row(row)
+        return self.sessions.create_session(session_id, title)
 
     def list_sessions(self) -> list[ChatSession]:
-        with self.connect() as conn:
-            rows = conn.execute("select * from sessions order by created_at desc").fetchall()
-        return [self._session_from_row(row) for row in rows]
+        return self.sessions.list_sessions()
 
     def rename_session(self, session_id: str, title: str) -> None:
-        with self.connect() as conn:
-            conn.execute(
-                "update sessions set title = ? where session_id = ?",
-                (title, session_id),
-            )
+        self.sessions.rename_session(session_id, title)
 
     def delete_session(self, session_id: str) -> None:
         """Delete a session and all its documents, chunks, and nodes."""
-        with self.connect() as conn:
-            doc_rows = conn.execute(
-                "select document_id from documents where session_id = ?",
-                (session_id,),
-            ).fetchall()
-            doc_ids = [row["document_id"] for row in doc_rows]
-            if doc_ids:
-                marks = ",".join("?" for _ in doc_ids)
-                conn.execute(f"delete from chunks where document_id in ({marks})", doc_ids)
-                conn.execute(f"delete from nodes where document_id in ({marks})", doc_ids)
-            conn.execute("delete from documents where session_id = ?", (session_id,))
-            conn.execute("delete from sessions where session_id = ?", (session_id,))
+        self.sessions.delete_session(session_id)
 
     def delete_document(self, document_id: str) -> list[str]:
         """Delete a single document and its chunks and nodes. Returns list of deleted chunk_ids."""
-        with self.connect() as conn:
-            chunk_rows = conn.execute(
-                "select chunk_id from chunks where document_id = ?",
-                (document_id,),
-            ).fetchall()
-            chunk_ids = [row["chunk_id"] for row in chunk_rows]
-            conn.execute("delete from chunks where document_id = ?", (document_id,))
-            conn.execute("delete from nodes where document_id = ?", (document_id,))
-            conn.execute("delete from documents where document_id = ?", (document_id,))
-        return chunk_ids
+        return self.documents.delete_document(document_id)
 
     def count_documents_for_session(self, session_id: str) -> int:
-        with self.connect() as conn:
-            row = conn.execute(
-                "select count(*) as count from documents where session_id = ?",
-                (session_id,),
-            ).fetchone()
-        return int(row["count"]) if row else 0
+        return self.documents.count_for_session(session_id)
 
     def upsert_document(self, document: Document) -> None:
-        with self.connect() as conn:
-            conn.execute(
-                """
-                insert into documents(document_id, filename, sha256, path, status, session_id)
-                values(?, ?, ?, ?, ?, ?)
-                on conflict(document_id) do update set
-                    filename=excluded.filename,
-                    sha256=excluded.sha256,
-                    path=excluded.path,
-                    status=excluded.status,
-                    session_id=excluded.session_id
-                """,
-                (
-                    document.document_id,
-                    document.filename,
-                    document.sha256,
-                    document.path,
-                    document.status,
-                    document.session_id,
-                ),
-            )
+        self.documents.upsert_document(document)
 
     def find_document_by_hash(self, sha256: str, session_id: str | None = None) -> Document | None:
-        with self.connect() as conn:
-            if session_id is None:
-                row = conn.execute("select * from documents where sha256 = ?", (sha256,)).fetchone()
-            else:
-                row = conn.execute(
-                    "select * from documents where sha256 = ? and session_id = ?",
-                    (sha256, session_id),
-                ).fetchone()
-        return self._document_from_row(row) if row else None
+        return self.documents.find_by_hash(sha256, session_id)
+
+    def get_document_by_hash(self, sha256: str, session_id: str | None = None) -> Document | None:
+        return self.find_document_by_hash(sha256, session_id)
+
+    def get_document(self, document_id: str) -> Document:
+        return self.documents.get_document(document_id)
+
+    def upsert_document_by_hash(
+        self,
+        *,
+        filename: str,
+        path: str,
+        file_hash: str,
+        session_id: str | None = None,
+        status: str = "processing",
+    ) -> Document:
+        return self.documents.upsert_by_hash(
+            filename=filename,
+            path=path,
+            file_hash=file_hash,
+            session_id=session_id or DEFAULT_SESSION_ID,
+            status=status,
+        )
 
     def update_document_status(self, document_id: str, status: str) -> None:
-        with self.connect() as conn:
-            conn.execute(
-                "update documents set status = ? where document_id = ?",
-                (status, document_id),
-            )
+        self.documents.update_status(document_id, status)
+
+    def set_document_status(self, document_id: str, status: str) -> None:
+        self.update_document_status(document_id, status)
 
     def list_documents(self, session_id: str | None = None) -> list[Document]:
-        with self.connect() as conn:
-            if session_id is None:
-                rows = conn.execute("select * from documents order by created_at desc").fetchall()
-            else:
-                rows = conn.execute(
-                    "select * from documents where session_id = ? order by created_at desc",
-                    (session_id,),
-                ).fetchall()
-        return [self._document_from_row(row) for row in rows]
+        return self.documents.list_documents(session_id)
 
     def count_chunks_for_document(self, document_id: str) -> int:
         with self.connect() as conn:

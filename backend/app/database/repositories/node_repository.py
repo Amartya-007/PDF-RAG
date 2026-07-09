@@ -69,6 +69,11 @@ class NodeRepository:
                 ),
             )
 
+    def upsert_many(self, nodes: list[DocumentNode]) -> None:
+        """Insert or update multiple ``DocumentNode`` rows."""
+        for node in nodes:
+            self.upsert_node(node)
+
     def delete_nodes_for_document(self, document_id: str) -> None:
         """Delete all ``nodes`` rows belonging to *document_id*."""
         with self._connect() as conn:
@@ -76,6 +81,9 @@ class NodeRepository:
                 "DELETE FROM nodes WHERE document_id = ?",
                 (document_id,),
             )
+
+    def delete_for_document(self, document_id: str) -> None:
+        self.delete_nodes_for_document(document_id)
 
     # ── Read operations ────────────────────────────────────────────────────
 
@@ -123,6 +131,17 @@ class NodeRepository:
                 ORDER BY n.document_id ASC, n.depth ASC, n.position ASC
                 """,
                 (session_id,),
+            ).fetchall()
+        return [self._node_from_row(row) for row in rows]
+
+    def list_all_nodes(self) -> list[DocumentNode]:
+        """Return all nodes, ordered by document_id, depth, and position."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM nodes
+                ORDER BY document_id ASC, depth ASC, position ASC
+                """
             ).fetchall()
         return [self._node_from_row(row) for row in rows]
 

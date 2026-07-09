@@ -103,7 +103,7 @@ class PdfParser:
         raise ParseError(
             "PDF parsing requires PyMuPDF, but it could not be imported.\n\n"
             "Fix:\n"
-            "  py -m pip install -e .[desktop]\n\n"
+            "  py -m pip install -e .[pdf]\n\n"
             "Details:\n"
             + "\n".join(errors)
         )

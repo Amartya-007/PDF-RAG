@@ -211,3 +211,10 @@ class IngestionService:
             PageText(page_number=p, text="\n".join(texts))
             for p, texts in sorted(page_map.items())
         ]
+
+
+# Compatibility shim: task 4.6 moved the implementation to the service layer.
+from backend.app.services.ingestion_service import (  # noqa: E402,F401
+    IngestionService,
+    ProgressCallback,
+)

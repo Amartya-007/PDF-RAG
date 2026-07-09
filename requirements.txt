@@ -30,12 +30,6 @@ tzdata==2026.2
 # ── PDF parsing ────────────────────────────────────────────────────────
 pymupdf==1.28.0
 
-# ── Desktop UI ─────────────────────────────────────────────────────────
-PySide6==6.11.1
-PySide6-Addons==6.11.1
-PySide6-Essentials==6.11.1
-shiboken6==6.11.1
-
 # ── Data validation ────────────────────────────────────────────────────
 pydantic==2.13.4
 pydantic-core==2.46.4
@@ -46,11 +40,6 @@ typing-inspection==0.4.2
 # ── Packaging / build ─────────────────────────────────────────────────
 setuptools==82.0.1
 packaging==26.2
-pyinstaller==6.21.0
-pyinstaller-hooks-contrib==2026.6
-altgraph==0.17.5
-pefile==2024.8.26
-pywin32-ctypes==0.2.3
 colorama==0.4.6
 
 # ── Testing ────────────────────────────────────────────────────────────
