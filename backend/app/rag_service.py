@@ -60,6 +60,19 @@ class RagService:
         self.answerer = Answerer(self.settings)
         self.okf = OkfGenerator(self.settings.okf_dir, self.store)
         self.okf_importer = OkfImporter(self.settings.okf_dir, self.store)
+        self._classifier = QueryClassifier()
+        self._chunker = Chunker()
+        self._parser = PdfParser()
+        self._pipeline = IngestionPipeline(
+            store=self.store,
+            parser=self._parser,
+            chunker=self._chunker,
+            embedder=self.embedder,
+            vectors=self.vectors,
+            sparse=self.sparse,
+            documents_dir=self.settings.documents_dir,
+            embedding_batch_size=self.settings.embedding_batch_size,
+        )
         # ── Vectorless RAG ────────────────────────────────────────────
         self._ollama_client = OllamaClient(self.settings) if self.settings.use_ollama else None
         self.tree_indexer = TreeIndexer(
@@ -129,21 +142,26 @@ class RagService:
                 self._rebuild_okf_indexes()
                 logger.info("OKF generated in %.2fs", time.perf_counter() - t0)
 
-        # ── PHASE 3: vectorless tree index ────────────────────────────────
-        # Build and persist the hierarchical section tree so the LLM can
-        # navigate it at query time instead of doing vector similarity search.
-        try:
-            t_tree = time.perf_counter()
-            tree = self.tree_indexer.build(document.document_id, document.filename, pages)
-            self.tree_indexer.save(tree)
-            self.tree_indexer.save_with_raw(tree)
-            logger.info("tree index built (%d nodes) in %.2fs",
-                        len(tree.all_nodes()), time.perf_counter() - t_tree)
-        except Exception as exc:
-            logger.warning("tree indexing failed (non-fatal): %s", exc)
+        # ── Legacy vectorless tree index (superseded by DocumentNode tree
+        # in backend/app/domain — see tasks.md task 6.2 deprecation note).
+        # Kept as a best-effort, non-fatal enrichment for the old
+        # TreeRetriever path; failures here must never break ingestion.
+        if self.settings.use_tree_search and self._ollama_client is not None:
+            try:
+                t_tree = time.perf_counter()
+                pages = self._parser.parse(source_path)
+                tree = self.tree_indexer.build(ready_doc.document_id, ready_doc.filename, pages)
+                self.tree_indexer.save(tree)
+                self.tree_indexer.save_with_raw(tree)
+                logger.info(
+                    "tree index built (%d nodes) in %.2fs",
+                    len(tree.all_nodes()), time.perf_counter() - t_tree,
+                )
+            except Exception as exc:
+                logger.warning("tree indexing failed (non-fatal): %s", exc)
 
-        logger.info("ingest finished: %s in %.2fs", source_path.name, time.perf_counter() - started_at)
-        return ready_document
+        logger.info("ingest finished: %s", source_path.name)
+        return ready_doc
 
     def _index_chunks_with_progress(
         self,
@@ -278,7 +296,7 @@ class RagService:
                     trees.append(t)
             if trees:
                 try:
-                    tree_chunks = self.tree_retriever.retrieve(search_question, trees)
+                    tree_chunks = self.tree_retriever.retrieve(question, trees)
                     logger.info("tree retrieval: %d chunks from %d trees", len(tree_chunks), len(trees))
                 except Exception as exc:
                     logger.warning("tree retrieval failed (non-fatal): %s", exc)
@@ -292,7 +310,7 @@ class RagService:
                 seen_ids.add(chunk.chunk_id)
         candidates = merged
 
-        if fast_fact_query:
+        if is_fast_fact:
             selected = self._rank_fast_fact_candidates(question, chunks, candidates)[:context_limit]
         elif is_topic:
             selected = self._rank_topic_candidates(normalised, chunks, candidates)[:context_limit]
@@ -320,6 +338,8 @@ class RagService:
                 "selected_chunk_ids": [c.chunk_id for c in selected],
                 "is_fast_fact": is_fast_fact,
                 "is_topic": is_topic,
+                "fast_fact_query": is_fast_fact,
+                "topic_query": is_topic,
             }
         return selected, debug
 
