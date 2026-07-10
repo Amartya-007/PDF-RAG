@@ -1,15 +1,12 @@
-"""API schema for query answer responses.
-
-Requirements: 21.7, 21.11
-"""
 from __future__ import annotations
 
-from typing import Any
-
+from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 from backend.app.api.schemas.citation import CitationOut
 
+# Define the strategy as a reusable type for strict validation
+AnswerStrategy = Literal["EXTRACTIVE", "GENERATE", "INSUFFICIENT"]
 
 class AnswerResponse(BaseModel):
     """Complete answer returned by ``POST /api/query``.
@@ -37,7 +34,7 @@ class AnswerResponse(BaseModel):
         ...,
         description="False when the system found insufficient evidence to answer",
     )
-    strategy: str = Field(
+    strategy: AnswerStrategy = Field(
         ...,
         description="Answer strategy applied: EXTRACTIVE | GENERATE | INSUFFICIENT",
     )
@@ -51,3 +48,5 @@ class AnswerResponse(BaseModel):
         default=None,
         description="Retrieval diagnostics — only populated when include_debug=True",
     )
+
+    model_config = {"from_attributes": True}

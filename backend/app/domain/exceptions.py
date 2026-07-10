@@ -1,6 +1,6 @@
 """Domain-specific exceptions for the Local PDF RAG system.
 
-Every subsystem raises one of these instead of bare RuntimeError /
+Every subsystem raises one of these instead of bare RuntimeError or
 ValueError so callers can catch exactly what they need to.
 """
 from __future__ import annotations
@@ -12,6 +12,7 @@ class RagError(Exception):
 
 # ── Ingestion ──────────────────────────────────────────────────────────────
 
+
 class IngestionError(RagError):
     """Raised when a document cannot be ingested successfully."""
 
@@ -21,7 +22,12 @@ class ParseError(IngestionError):
 
 
 class DuplicateDocumentError(IngestionError):
-    """Raised when an identical document is already indexed in this session."""
+    """Raised when an identical document is already indexed in this session.
+
+    Attributes:
+        document_id: The ID of the existing document.
+        filename:    The filename of the document.
+    """
 
     def __init__(self, document_id: str, filename: str) -> None:
         self.document_id = document_id
@@ -32,11 +38,17 @@ class DuplicateDocumentError(IngestionError):
 
 
 class UnsupportedFileTypeError(IngestionError):
-    """Raised when the uploaded file type is not supported."""
+    """Raised when the uploaded file type is not supported.
+
+    Attributes:
+        suffix: The file extension that was rejected.
+    """
 
     def __init__(self, suffix: str) -> None:
         self.suffix = suffix
-        super().__init__(f"Unsupported file type: '{suffix}'. Only .pdf, .txt, and .md are accepted.")
+        super().__init__(
+            f"Unsupported file type: '{suffix}'. Only .pdf, .txt, and .md are accepted."
+        )
 
 
 class EmptyDocumentError(IngestionError):
@@ -45,11 +57,13 @@ class EmptyDocumentError(IngestionError):
 
 # ── Embedding ──────────────────────────────────────────────────────────────
 
+
 class EmbeddingError(RagError):
     """Raised when the embedding provider fails or returns unexpected output."""
 
 
 # ── Retrieval ──────────────────────────────────────────────────────────────
+
 
 class RetrievalError(RagError):
     """Raised when the retrieval pipeline encounters an unrecoverable error."""
@@ -57,18 +71,24 @@ class RetrievalError(RagError):
 
 # ── Generation ─────────────────────────────────────────────────────────────
 
+
 class GenerationError(RagError):
     """Raised when the LLM provider fails to generate a response."""
 
 
 # ── Storage ────────────────────────────────────────────────────────────────
 
+
 class StorageError(RagError):
     """Raised when a database or index operation fails."""
 
 
 class DocumentNotFoundError(StorageError):
-    """Raised when a requested document does not exist in the store."""
+    """Raised when a requested document does not exist in the store.
+
+    Attributes:
+        document_id: The missing document's identifier.
+    """
 
     def __init__(self, document_id: str) -> None:
         self.document_id = document_id
@@ -76,7 +96,11 @@ class DocumentNotFoundError(StorageError):
 
 
 class SessionNotFoundError(StorageError):
-    """Raised when a requested chat session does not exist."""
+    """Raised when a requested chat session does not exist.
+
+    Attributes:
+        session_id: The missing session's identifier.
+    """
 
     def __init__(self, session_id: str) -> None:
         self.session_id = session_id
@@ -85,11 +109,13 @@ class SessionNotFoundError(StorageError):
 
 # ── Index ──────────────────────────────────────────────────────────────────
 
+
 class IndexCorruptionError(RagError):
     """Raised when a persisted index file is unreadable or structurally invalid."""
 
 
 # ── Answer generation ──────────────────────────────────────────────────────
+
 
 class AnswerGenerationError(RagError):
     """Raised when the LLM answerer fails to produce a valid response."""

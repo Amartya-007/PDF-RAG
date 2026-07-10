@@ -4,8 +4,7 @@ Requirements: 21.7
 """
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
-
+from pydantic import BaseModel, Field, HttpUrl
 
 class SettingsOut(BaseModel):
     """Read representation of the current application settings.
@@ -25,7 +24,8 @@ class SettingsOut(BaseModel):
         debug_mode:            Whether debug diagnostics are enabled.
     """
 
-    ollama_base_url: str = Field(..., description="Base URL of the local Ollama instance")
+    # OPTIMIZATION: Using HttpUrl forces the system to validate the URL structure.
+    ollama_base_url: HttpUrl = Field(..., description="Base URL of the local Ollama instance")
     generation_model: str = Field(..., description="Active Ollama model for answer synthesis")
     use_ollama: bool = Field(..., description="Whether Ollama answer synthesis is enabled")
     max_upload_size_mb: int = Field(default=100, ge=1, description="Maximum upload file size in MB")
@@ -35,11 +35,13 @@ class SettingsOut(BaseModel):
     )
     backend_host: str = Field(default="127.0.0.1", description="Interface the server is bound to")
     backend_port: int = Field(default=8000, ge=1, le=65535, description="Server port")
-    frontend_origin: str = Field(
+    frontend_origin: HttpUrl = Field(
         default="http://localhost:3000",
         description="CORS-allowed frontend origin",
     )
     debug_mode: bool = Field(default=False, description="Whether debug diagnostics are enabled")
+
+    model_config = {"from_attributes": True}
 
 
 class SettingsPatchRequest(BaseModel):

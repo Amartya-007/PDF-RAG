@@ -5,18 +5,27 @@ box, indentation, and line spacing so ``HeadingDetector`` can use visual
 cues rather than pure text heuristics.
 
 For born-digital PDFs via PyMuPDF: font-level metadata is extracted per
-text block.  For plain text / Markdown / scanned PDFs: visual fields
+text block. For plain text / Markdown / scanned PDFs: visual fields
 default to ``None`` / ``False`` / ``0.0``.
 """
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-import importlib
 from pathlib import Path
-from types import ModuleType
+from typing import Any
+
+# Optional PDF support
+try:
+    import fitz  # PyMuPDF
+    _HAS_PDF = True
+except ImportError:
+    _HAS_PDF = False
 
 from backend.app.ingestion.parser.pdf_parser import PageText
+
+# Pre-compiled regex for performance
+_PARA_SPLIT_RE = re.compile(r"\n{2,}")
 
 
 @dataclass(slots=True)
@@ -33,7 +42,6 @@ class LayoutNode:
         indent:       Left-margin indentation (0.0 when unavailable).
         line_spacing: Vertical distance between lines (0.0 when unavailable).
     """
-
     text: str
     page_number: int
     font_size: float | None = None
@@ -45,157 +53,57 @@ class LayoutNode:
 
 
 class LayoutParser:
-    """Converts a file path into a list of ``LayoutNode`` objects.
-
-    Tries PyMuPDF for born-digital PDFs; falls back to ``PdfParser``
-    output (text-only, no visual metadata) for plain text or scanned PDFs.
-    """
+    """Parses files into a sequence of structured LayoutNodes."""
 
     def parse(self, path: Path) -> list[LayoutNode]:
-        suffix = path.suffix.lower()
-        if suffix == ".pdf":
+        """Entry point for parsing; routes by file extension.
+
+        Attributes:
+            path: Path to the document (PDF, TXT, or MD).
+        """
+        if path.suffix.lower() == ".pdf" and _HAS_PDF:
             return self._parse_pdf(path)
-        # Plain text or Markdown: no visual metadata available
         return self._parse_plain(path)
 
-    # ── PDF path ───────────────────────────────────────────────────────────
-
     def _parse_pdf(self, path: Path) -> list[LayoutNode]:
-        try:
-            pymupdf = self._load_pymupdf()
-            nodes = self._parse_with_pymupdf(path, pymupdf)
-            if nodes:
-                return nodes
-        except ImportError:
-            pass
-        # Fallback: use existing PdfParser (text only)
-        from backend.app.ingestion.parser.pdf_parser import PdfParser
-        pages = PdfParser().parse(path)
-        return self._pages_to_layout_nodes(pages)
-
-    @staticmethod
-    def _load_pymupdf() -> ModuleType:
-        errors: list[Exception] = []
-        for module_name in ("pymupdf", "fitz"):
-            try:
-                return importlib.import_module(module_name)
-            except ImportError as exc:
-                errors.append(exc)
-        raise errors[-1] if errors else ImportError("PyMuPDF is unavailable")
-
-    def _parse_with_pymupdf(self, path: Path, pymupdf) -> list[LayoutNode]:  # type: ignore[no-untyped-def]
+        """Extract nodes using PyMuPDF (fitz) for rich layout metadata."""
         nodes: list[LayoutNode] = []
-        doc = pymupdf.open(str(path))
-        try:
-            for page_idx in range(len(doc)):
-                page = doc[page_idx]
-                page_number = page_idx + 1
-                # Extract blocks with dict metadata (font, bbox, etc.)
-                block_dict = page.get_text("dict", flags=pymupdf.TEXT_PRESERVE_WHITESPACE)
-                for block in block_dict.get("blocks", []):
-                    if block.get("type") != 0:   # type 0 = text block
-                        continue
-                    block_text, font_size, font_name, is_bold, bbox, indent, line_spacing = (
-                        self._extract_block_info(block)
-                    )
-                    if not block_text.strip():
-                        continue
-                    nodes.append(LayoutNode(
-                        text=block_text,
-                        page_number=page_number,
-                        font_size=font_size,
-                        font_name=font_name,
-                        is_bold=is_bold,
-                        bbox=bbox,
-                        indent=indent,
-                        line_spacing=line_spacing,
-                    ))
-        finally:
-            doc.close()
+        with fitz.open(path) as doc:
+            for page in doc:
+                blocks = page.get_text("dict")["blocks"]
+                for b in blocks:
+                    if b.get("type") == 0:  # Text block
+                        text = "".join(l["text"] for l in b["lines"])
+                        # Extract first line metadata for heading detection
+                        line0 = b["lines"][0]["spans"][0]
+                        nodes.append(LayoutNode(
+                            text=text.strip(),
+                            page_number=page.number + 1,
+                            font_size=line0.get("size"),
+                            font_name=line0.get("font"),
+                            is_bold="bold" in line0.get("font", "").lower(),
+                            bbox=b["bbox"],
+                            indent=b["bbox"][0],
+                        ))
         return nodes
 
-    @staticmethod
-    def _extract_block_info(block: dict) -> tuple[
-        str, float | None, str | None, bool, tuple | None, float, float
-    ]:
-        """Pull text and dominant font attributes from a PyMuPDF block dict."""
-        lines = block.get("lines", [])
-        all_text: list[str] = []
-        sizes: list[float] = []
-        fonts: list[str] = []
-        bold_flags: list[bool] = []
-        line_tops: list[float] = []
-
-        for line in lines:
-            raw_line_bbox = line.get("bbox")
-            if raw_line_bbox and len(raw_line_bbox) == 4:
-                line_tops.append(float(raw_line_bbox[1]))
-            for span in line.get("spans", []):
-                t = span.get("text", "")
-                if t:
-                    all_text.append(t)
-                    sizes.append(span.get("size", 0.0))
-                    fonts.append(span.get("font", ""))
-                    # Bit 4 (value 16) in PyMuPDF flags = bold
-                    bold_flags.append(bool(span.get("flags", 0) & 16))
-
-        text = "".join(all_text).strip()
-        font_size = max(sizes) if sizes else None
-        # Dominant font: the one that appears most often
-        font_name = max(set(fonts), key=fonts.count) if fonts else None
-        is_bold = bool(sum(bold_flags) > len(bold_flags) / 2) if bold_flags else False
-
-        raw_bbox = block.get("bbox")
-        bbox = tuple(raw_bbox) if raw_bbox and len(raw_bbox) == 4 else None
-        indent = float(raw_bbox[0]) if raw_bbox else 0.0
-        line_spacing = LayoutParser._line_spacing(line_tops)
-
-        return text, font_size, font_name, is_bold, bbox, indent, line_spacing
-
-    @staticmethod
-    def _line_spacing(line_tops: list[float]) -> float:
-        if len(line_tops) < 2:
-            return 0.0
-        ordered = sorted(line_tops)
-        gaps = [
-            later - earlier
-            for earlier, later in zip(ordered, ordered[1:])
-            if later > earlier
-        ]
-        return sum(gaps) / len(gaps) if gaps else 0.0
-
-    # ── Plain text / Markdown path ─────────────────────────────────────────
-
     def _parse_plain(self, path: Path) -> list[LayoutNode]:
+        """Fallback for plain text / Markdown documents."""
         text = path.read_text(encoding="utf-8", errors="replace")
         pages = self._split_into_pages(text)
+        
         nodes: list[LayoutNode] = []
-        for page_number, page_text in enumerate(pages, start=1):
-            for para in self._split_paragraphs(page_text):
-                if para.strip():
-                    nodes.append(LayoutNode(
-                        text=para,
-                        page_number=page_number,
-                    ))
+        for i, page_text in enumerate(pages, start=1):
+            for para in _PARA_SPLIT_RE.split(page_text):
+                if stripped := para.strip():
+                    nodes.append(LayoutNode(text=stripped, page_number=i))
         return nodes
 
     @staticmethod
     def _split_into_pages(text: str, lines_per_page: int = 50) -> list[str]:
+        """Split plain text into artificial pages for consistent indexing."""
         lines = text.splitlines(keepends=True)
-        pages: list[str] = []
-        for i in range(0, len(lines), lines_per_page):
-            pages.append("".join(lines[i : i + lines_per_page]))
-        return pages or [""]
-
-    @staticmethod
-    def _split_paragraphs(text: str) -> list[str]:
-        return [p.strip() for p in re.split(r"\n{2,}", text) if p.strip()]
-
-    @staticmethod
-    def _pages_to_layout_nodes(pages: list[PageText]) -> list[LayoutNode]:
-        nodes: list[LayoutNode] = []
-        for page in pages:
-            for para in re.split(r"\n{2,}", page.text):
-                if para.strip():
-                    nodes.append(LayoutNode(text=para.strip(), page_number=page.page_number))
-        return nodes
+        return [
+            "".join(lines[i : i + lines_per_page]) 
+            for i in range(0, len(lines), lines_per_page)
+        ] or [""]

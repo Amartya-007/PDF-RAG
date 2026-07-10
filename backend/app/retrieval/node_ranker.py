@@ -5,13 +5,13 @@ Designed to run in < 5 ms for ≤ 200 candidates on any hardware.
 
 Scoring signals (weighted sum, normalised to 0–1 range)
 ---------------------------------------------------------
-Signal                    Weight   Notes
+Signal                    Weight    Notes
 ──────────────────────────────────────────────────────────
 Token overlap (Jaccard)    0.50    Query tokens ∩ node tokens
-Heading-text match         0.20    Normalised substring of title in query
+Heading-text match         0.20    Normalised substring or token overlap of title in query
 Source signal (tree)       0.15    Tree-selected nodes get a bonus
 Page position boost        0.10    Earlier pages rank slightly higher
-Text density               0.05    Prefer nodes with > 30 words
+Text density               0.05    Prefer robust nodes over empty fragments
 """
 from __future__ import annotations
 
@@ -32,12 +32,6 @@ def _jaccard(a: frozenset[str], b: frozenset[str]) -> float:
     inter = len(a & b)
     union = len(a | b)
     return inter / union if union else 0.0
-
-
-def _recall(query_tokens: frozenset[str], text_tokens: frozenset[str]) -> float:
-    if not query_tokens:
-        return 0.0
-    return len(query_tokens & text_tokens) / len(query_tokens)
 
 
 @dataclass(slots=True)
@@ -94,12 +88,14 @@ class NodeRanker:
 
         query_tokens = _token_set(query)
         tree_ids = tree_selected_ids or set()
+        
         results = [
             self._score_node(node, query, query_tokens, tree_ids)
             for node in candidates
         ]
         results.sort(key=lambda r: r.score, reverse=True)
         self._remember_results(results)
+        
         return results[:top_k] if top_k is not None else results
 
     def rerank(
@@ -113,45 +109,8 @@ class NodeRanker:
         ranked = self.rank(query, candidates, tree_selected_ids, top_k)
         return [r.node for r in ranked]
 
-    def rank_fast_fact(
-        self,
-        question: str,
-        nodes: list[DocumentNode],
-        candidate_ids: set[str],
-    ) -> list[DocumentNode]:
-        """Rank structured-field lookup candidates without embeddings."""
-        results = [
-            self._score_specialized_node(
-                node,
-                question,
-                candidate_ids,
-                mode="fast_fact",
-            )
-            for node in nodes
-        ]
-        results.sort(key=lambda item: item[0], reverse=True)
-        return [node for _score, node in results]
-
-    def rank_topic(
-        self,
-        question: str,
-        nodes: list[DocumentNode],
-        candidate_ids: set[str],
-    ) -> list[DocumentNode]:
-        """Rank topic/explanation candidates without embeddings."""
-        results = [
-            self._score_specialized_node(
-                node,
-                question,
-                candidate_ids,
-                mode="topic",
-            )
-            for node in nodes
-        ]
-        results.sort(key=lambda item: item[0], reverse=True)
-        return [node for _score, node in results]
-
     def score_details(self, node_id: str) -> dict[str, float]:
+        """Returns scoring breakdowns for debugging retrieval logic."""
         return self._last_details.get(node_id, {})
 
     # ── Private helpers ────────────────────────────────────────────────────
@@ -163,12 +122,14 @@ class NodeRanker:
         query_tokens: frozenset[str],
         tree_ids: set[str],
     ) -> RankingResult:
-        node_tokens = _token_set(node.text)
+        node_text = node.text or ""
+        node_tokens = _token_set(node_text)
+        
         overlap  = _jaccard(query_tokens, node_tokens)
         heading  = self._heading_match(query, node.title)
         source   = 1.0 if node.id in tree_ids else 0.0
         page     = self._page_score(node.page_start)
-        density  = self._density_score(node.text)
+        density  = self._density_score(node_text)
 
         score = (
             self._W_OVERLAP * overlap
@@ -188,55 +149,6 @@ class NodeRanker:
             signal_density=density,
         )
 
-    def _score_specialized_node(
-        self,
-        node: DocumentNode,
-        question: str,
-        candidate_ids: set[str],
-        mode: str,
-    ) -> tuple[float, DocumentNode]:
-        question_tokens = _token_set(question)
-        node_tokens = _token_set(" ".join([node.title or "", node.text]))
-        overlap = _recall(question_tokens, node_tokens)
-        heading = self._heading_match(question, node.title)
-        retrieval_hit = 1.0 if node.id in candidate_ids else 0.0
-        page = self._page_score(node.page_start)
-        density = self._density_score(node.text)
-
-        fast_fact_score = self._fast_fact_signal(question_tokens, node_tokens)
-        topic_score = self._topic_signal(question, question_tokens, node)
-
-        if mode == "fast_fact":
-            score = (
-                0.35 * overlap
-                + 0.25 * fast_fact_score
-                + 0.20 * retrieval_hit
-                + 0.10 * heading
-                + 0.05 * page
-                + 0.05 * density
-            )
-        else:
-            score = (
-                0.35 * topic_score
-                + 0.25 * heading
-                + 0.20 * overlap
-                + 0.10 * retrieval_hit
-                + 0.05 * page
-                + 0.05 * density
-            )
-
-        self._last_details[node.id] = {
-            "score": round(score, 4),
-            "overlap": overlap,
-            "heading_score": heading,
-            "retrieval_hit": retrieval_hit,
-            "page_score": page,
-            "density_score": density,
-            "fast_fact_score": fast_fact_score,
-            "topic_score": topic_score,
-        }
-        return (score, node)
-
     def _remember_results(self, results: list[RankingResult]) -> None:
         self._last_details = {
             result.node.id: {
@@ -246,45 +158,9 @@ class NodeRanker:
                 "retrieval_hit": result.signal_source,
                 "page_score": result.signal_page,
                 "density_score": result.signal_density,
-                "fast_fact_score": 0.0,
-                "topic_score": result.signal_overlap + result.signal_heading,
             }
             for result in results
         }
-
-    @staticmethod
-    def _fast_fact_signal(
-        question_tokens: frozenset[str],
-        node_tokens: frozenset[str],
-    ) -> float:
-        fast_terms = {
-            "name", "college", "collage", "institute", "university", "school",
-            "degree", "course", "branch", "program", "cgpa", "gpa", "email",
-            "phone", "mobile", "contact",
-        }
-        matched_query_terms = question_tokens & fast_terms
-        if not matched_query_terms:
-            return 0.0
-        synonym_hits = 0.0
-        if {"college", "collage"} & matched_query_terms and {
-            "college", "institute", "university", "school",
-        } & node_tokens:
-            synonym_hits = 1.0
-        if "name" in matched_query_terms and len(node_tokens) >= 2:
-            synonym_hits = max(synonym_hits, 0.5)
-        return min(1.0, _recall(matched_query_terms, node_tokens) + synonym_hits)
-
-    def _topic_signal(
-        self,
-        question: str,
-        question_tokens: frozenset[str],
-        node: DocumentNode,
-    ) -> float:
-        node_tokens = _token_set(" ".join([node.title or "", node.text]))
-        return max(
-            _recall(question_tokens, node_tokens),
-            self._heading_match(question, node.title),
-        )
 
     @staticmethod
     def _heading_match(query: str, title: str | None) -> float:

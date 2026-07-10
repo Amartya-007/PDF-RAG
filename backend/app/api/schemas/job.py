@@ -1,11 +1,21 @@
-"""API schema for ingestion job resources.
-
-Requirements: 21.7
-"""
 from __future__ import annotations
 
+from typing import Literal
 from pydantic import BaseModel, Field
 
+# Reusable status type for consistency across your service
+JobStatus = Literal[
+    "queued",
+    "parsing",
+    "cleaning",
+    "detecting_structure",
+    "building_nodes",
+    "indexing_fts",
+    "indexing_headings",
+    "completed",
+    "failed",
+    "cancelled"
+]
 
 class JobOut(BaseModel):
     """Read representation of a background ingestion job.
@@ -29,13 +39,9 @@ class JobOut(BaseModel):
 
     job_id: str = Field(..., description="Stable job identifier")
     document_id: str = Field(..., description="Identifier of the document being ingested")
-    status: str = Field(
+    status: JobStatus = Field(
         ...,
-        description=(
-            "Pipeline stage or terminal state: queued | parsing | cleaning | "
-            "detecting_structure | building_nodes | indexing_fts | "
-            "indexing_headings | completed | failed | cancelled"
-        ),
+        description="Current pipeline stage or terminal state",
     )
     progress_message: str = Field(
         default="",

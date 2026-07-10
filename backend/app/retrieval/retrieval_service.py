@@ -4,7 +4,7 @@ Pipeline per query
 ------------------
 1. LexicalRetriever    → (node_id, score) list via FTS5 + Heading + Phrase RRF
 2. TreeNavigator       → deterministic parent/sibling/child expansion
-3. Merge               → deduplicated union, tree nodes first
+3. Merge               → deduplicated in-memory union, tree nodes first
 4. NodeRanker          → sort merged candidates by pure text signals
 5. ConfidenceGate      → abort with InsufficientEvidenceError if score too low
 6. Return              → top-k DocumentNode objects + debug info
@@ -40,17 +40,7 @@ class RetrievalResult:
 
 
 class RetrievalService:
-    """Thin orchestrator that sequences all vectorless retrieval components.
-
-    Args:
-        node_repo:      Source of truth for DocumentNode records.
-        lexical:        FTS5 + heading + phrase retriever.
-        navigator:      Deterministic hierarchy expansion.
-        ranker:         Pure-text candidate reranker.
-        gate:           Confidence threshold check before generation.
-        top_k:          Maximum nodes returned.
-        lexical_top_k:  Maximum candidates from LexicalRetriever.
-    """
+    """Thin orchestrator that sequences all vectorless retrieval components."""
 
     def __init__(
         self,
@@ -83,14 +73,9 @@ class RetrievalService:
 
         Args:
             query:         User question string.
-            session_id:    Scope retrieval to a session (prevents cross-session
-                           leakage in multi-user deployments).
+            session_id:    Scope retrieval to a session (prevents cross-session leakage).
             cancelled:     Mutable list; tree navigation stops when True.
             include_debug: Populate ``RetrievalResult`` debug fields.
-
-        Returns:
-            ``RetrievalResult`` — always a valid object.  When evidence is
-            insufficient ``nodes`` is empty and ``error`` is set.
         """
         if not query.strip():
             return RetrievalResult(
@@ -106,24 +91,31 @@ class RetrievalService:
             top_k=self._lexical_top_k,
             session_node_ids=session_node_ids,
         )
-        lexical_ids  = {nid for nid, _ in lexical_hits}
+
+        # FAST FAIL: If no lexical hits, stop immediately. Do not load the whole DB.
+        if not lexical_hits:
+            logger.info("RetrievalService: No lexical hits found for query.")
+            return RetrievalResult(
+                nodes=[],
+                gate_decision=GateDecision(passed=False, score=0.0, reason="No initial matches found."),
+            )
+
+        lexical_ids = {nid for nid, _ in lexical_hits}
+
+        # Fetch lexical nodes from DB (Only ONE DB call needed for the merge process)
+        lexical_nodes = self._repo.get_many(list(lexical_ids))
 
         # 2. Tree navigation: deterministic context expansion around lexical hits
-        matched_nodes = self._repo.get_many([node_id for node_id, _score in lexical_hits])
-        if not matched_nodes:
-            matched_nodes = (
-                self._repo.list_nodes_for_session(session_id)
-                if session_id
-                else self._repo.list_all_nodes()
-            )
-        tree_nodes = self._navigator.expand(matched_nodes, self._repo)
-        tree_ids   = {n.id for n in tree_nodes}
+        # Passed `cancelled` down to allow the navigator to abort early if needed.
+        tree_nodes = self._navigator.expand(lexical_nodes, self._repo, cancelled=cancelled)
+        tree_ids = {n.id for n in tree_nodes}
 
         # 3. Merge: tree nodes first, then lexical-only hits
+        # (Merged purely in-memory using the lexical_nodes we already fetched)
         id_to_node: dict[str, DocumentNode] = {n.id: n for n in tree_nodes}
-        if lexical_ids - tree_ids:
-            extra_nodes = self._repo.get_many(list(lexical_ids - tree_ids))
-            for node in extra_nodes:
+        
+        for node in lexical_nodes:
+            if node.id not in id_to_node:
                 id_to_node[node.id] = node
 
         candidates = list(id_to_node.values())
@@ -170,4 +162,3 @@ class RetrievalService:
         if session_id is None:
             return None
         return {n.id for n in self._repo.list_nodes_for_session(session_id)}
-

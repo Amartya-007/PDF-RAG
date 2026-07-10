@@ -1,8 +1,8 @@
-"""Abstract interfaces (Protocols) for every replaceable RAG component.
+"""Abstract interfaces (Protocols) for all replaceable RAG components.
 
 Using ``typing.Protocol`` gives us structural sub-typing: any class that
 implements the required methods satisfies the protocol without explicitly
-inheriting from it.  This keeps concrete implementations decoupled from
+inheriting from it. This keeps concrete implementations decoupled from
 this package and makes testing with fakes trivial.
 """
 from __future__ import annotations
@@ -23,24 +23,24 @@ class DocumentParser(Protocol):
         """Parse *path* and return one ``PageText`` per logical page.
 
         Raises:
-            ParseError: when no usable text can be extracted.
-            UnsupportedFileTypeError: when the file extension is not handled.
+            ParseError: When no usable text can be extracted.
+            UnsupportedFileTypeError: When the file extension is not handled.
         """
         ...
 
 
-# ── Keyword index ──────────────────────────────────────────────────────────
+# ── Indexing ───────────────────────────────────────────────────────────────
 
 @runtime_checkable
 class KeywordIndex(Protocol):
     """Persistent BM25-style sparse retrieval index."""
 
     def build(self, chunks: list[Chunk]) -> None:
-        """Full rebuild from *chunks*."""
+        """Perform a full index rebuild from the provided chunks."""
         ...
 
     def add_chunks(self, chunks: list[Chunk]) -> None:
-        """Incrementally add new chunks without a full rebuild."""
+        """Incrementally add new chunks to the index."""
         ...
 
     def remove_chunks(self, chunk_ids: list[str]) -> None:
@@ -51,14 +51,22 @@ class KeywordIndex(Protocol):
         """Return the *top_k* best-matching chunk IDs with their BM25 scores."""
         ...
 
-    def __len__(self) -> int:
+
+# ── Embeddings ─────────────────────────────────────────────────────────────
+
+@runtime_checkable
+class EmbeddingProvider(Protocol):
+    """Generates vector embeddings for text chunks."""
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        """Return vector embeddings for the provided list of texts."""
         ...
 
 
-# ── Reranker ───────────────────────────────────────────────────────────────
+# ── Reranking ──────────────────────────────────────────────────────────────
 
 @runtime_checkable
-class RerankerProtocol(Protocol):
+class Reranker(Protocol):
     """Scores query-chunk relevance to improve candidate ordering."""
 
     def rerank(
@@ -74,7 +82,7 @@ class RerankerProtocol(Protocol):
         ...
 
 
-# ── LLM provider ───────────────────────────────────────────────────────────
+# ── Generation ─────────────────────────────────────────────────────────────
 
 @runtime_checkable
 class LLMProvider(Protocol):
@@ -84,8 +92,6 @@ class LLMProvider(Protocol):
         """Return the model's completion for *prompt*.
 
         Raises:
-            GenerationError: when the provider is unavailable or times out.
+            GenerationError: When the provider is unavailable or times out.
         """
         ...
-
-

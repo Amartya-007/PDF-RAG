@@ -5,10 +5,10 @@ autocompletion, and makes exhaustive matching possible.
 """
 from __future__ import annotations
 
-from enum import Enum, auto
+from enum import StrEnum
 
 
-class DocumentStatus(str, Enum):
+class DocumentStatus(StrEnum):
     """Lifecycle state of a document in the ingestion pipeline."""
 
     PENDING = "pending"
@@ -17,10 +17,11 @@ class DocumentStatus(str, Enum):
     FAILED = "failed"
 
     def is_terminal(self) -> bool:
+        """Check if the status is a terminal state."""
         return self in (DocumentStatus.READY, DocumentStatus.FAILED)
 
 
-class ChunkType(str, Enum):
+class ChunkType(StrEnum):
     """Structural type of a text chunk."""
 
     PARAGRAPH = "paragraph"
@@ -30,7 +31,7 @@ class ChunkType(str, Enum):
     OKF_CONCEPT = "okf_concept"
 
 
-class QueryType(str, Enum):
+class QueryType(StrEnum):
     """Classification of an incoming user query."""
 
     DIRECT_FACTUAL = "direct_factual"
@@ -40,11 +41,11 @@ class QueryType(str, Enum):
     SUMMARY = "summary"
     DEFINITION = "definition"
     TOPIC = "topic"
-    FAST_FACT = "fast_fact"      # resume / structured-data fields
+    FAST_FACT = "fast_fact"
     FOLLOW_UP_OR_SHORT = "follow_up_or_short"
 
 
-class SearchMode(str, Enum):
+class SearchMode(StrEnum):
     """Retrieval strategy for a query."""
 
     HYBRID = "hybrid"      # dense + sparse + RRF

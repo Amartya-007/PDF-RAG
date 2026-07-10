@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections import defaultdict
 from collections.abc import Callable
 from pathlib import Path
 
@@ -77,6 +78,7 @@ class IngestionService:
         active_session = session_id or DEFAULT_SESSION_ID
         file_hash = sha256_file(path)
         existing = self._store.find_document_by_hash(file_hash, active_session)
+        
         if existing and existing.status == "ready" and not force:
             logger.info("Skipping duplicate ingestion for %s", path.name)
             return existing
@@ -115,6 +117,7 @@ class IngestionService:
         session_id: str,
         existing: Document | None,
     ) -> Document:
+        """Initializes or retrieves the document record."""
         document = Document(
             document_id=existing.document_id
             if existing
@@ -136,10 +139,11 @@ class IngestionService:
         build_okf: bool,
         progress: ProgressCallback | None,
     ) -> list[DocumentNode]:
+        """Executes the sequential ingestion pipeline stages."""
         self._advance(job_id, "parsing", "Parsing layout", 2, progress)
         layout_nodes = self._layout.parse(path)
         if not layout_nodes:
-            raise EmptyDocumentError(f"'{document.filename}' produced no text after parsing.")
+            raise EmptyDocumentError(f"'{document.filename}' produced no text.")
 
         self._advance(job_id, "cleaning", "Cleaning text", 3, progress)
         layout_nodes = self._clean_layout_nodes(layout_nodes)
@@ -162,9 +166,9 @@ class IngestionService:
         self._index.add_document_nodes(nodes)
 
         self._advance(job_id, "indexing_headings", "Indexing headings", 7, progress)
-        if build_okf and self._okf_gen is not None:
+        if build_okf and self._okf_gen:
             self._okf_gen.generate_for_document(chunks)
-        if self._tree_idx is not None:
+        if self._tree_idx:
             tree = self._tree_idx.build(
                 document.document_id,
                 document.filename,
@@ -177,38 +181,37 @@ class IngestionService:
     def _replace_persisted_nodes(
         self, document_id: str, nodes: list[DocumentNode]
     ) -> None:
-        stale_ids = [node.id for node in self._node_repo.list_nodes_for_document(document_id)]
-        if stale_ids:
-            self._index.remove_document(document_id, stale_ids)
+        """Removes existing nodes for a document and persists new ones."""
+        stale_nodes = self._node_repo.list_nodes_for_document(document_id)
+        if stale_nodes:
+            self._index.remove_document(document_id, [n.id for n in stale_nodes])
             self._node_repo.delete_nodes_for_document(document_id)
         self._node_repo.upsert_many(nodes)
 
     @staticmethod
     def _clean_layout_nodes(nodes: list[LayoutNode]) -> list[LayoutNode]:
+        """Filters nodes and cleans whitespace from text content."""
         return [
-            LayoutNode(
-                text=node.text.strip(),
-                page_number=node.page_number,
-                font_size=node.font_size,
-                font_name=node.font_name,
-                is_bold=node.is_bold,
-                bbox=node.bbox,
-                indent=node.indent,
-                line_spacing=node.line_spacing,
-            )
-            for node in nodes
-            if node.text.strip()
+            node.replace(text=node.text.strip()) 
+            for node in nodes 
+            if node.text and node.text.strip()
         ]
 
     @staticmethod
     def _nodes_to_page_texts(nodes: list[DocumentNode]) -> list[PageText]:
-        page_map: dict[int, list[str]] = {}
+        """Aggregates node text by page for chunking."""
+        page_map: dict[int, list[str]] = defaultdict(list)
         section_paths: dict[int, tuple[str, ...]] = {}
+
         for node in nodes:
             if node.node_type == "document" or not node.text.strip():
                 continue
-            page_map.setdefault(node.page_start, []).append(node.text)
-            section_paths.setdefault(node.page_start, tuple(node.heading_path))
+            
+            page_map[node.page_start].append(node.text)
+            # Retain the first valid section path found per page
+            if node.page_start not in section_paths:
+                section_paths[node.page_start] = tuple(node.heading_path)
+
         return [
             PageText(
                 page_number=page,
@@ -226,6 +229,7 @@ class IngestionService:
         done: int,
         progress: ProgressCallback | None,
     ) -> None:
+        """Updates job status and emits progress update."""
         self._job_repo.update_job_status(job_id, status, message)
         self._emit(progress, done, message)
 
@@ -235,5 +239,6 @@ class IngestionService:
         done: int,
         message: str,
     ) -> None:
-        if progress is not None:
+        """Calls the progress callback if provided."""
+        if progress:
             progress(done, self._TOTAL_STAGES, message)

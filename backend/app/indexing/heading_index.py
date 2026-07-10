@@ -1,7 +1,7 @@
 """HeadingIndex — in-memory index from normalised heading text to node_id.
 
 Enables direct heading-based lookup without vector similarity.
-Ranking uses: exact match → prefix match → token overlap (all pure string ops).
+Ranking uses: exact match → prefix match → token overlap.
 
 Rebuilt from NodeRepository on startup and after full index rebuild.
 """
@@ -10,81 +10,58 @@ from __future__ import annotations
 import re
 from collections import defaultdict
 
+# Pre-compiled regex for performance
+_TOKEN_RE = re.compile(r"\w+")
+_WHITESPACE_RE = re.compile(r"\s+")
+_NON_WORD_RE = re.compile(r"^[\W_]+|[\W_]+$")
+
 
 def _normalise(text: str) -> str:
-    """Lowercase, collapse whitespace, strip punctuation at boundaries."""
+    """Lowercase, collapse whitespace, and strip punctuation at boundaries."""
     text = text.lower().strip()
-    text = re.sub(r"\s+", " ", text)
-    text = re.sub(r"^[\W_]+|[\W_]+$", "", text)
-    return text
+    text = _WHITESPACE_RE.sub(" ", text)
+    return _NON_WORD_RE.sub("", text)
 
 
 def _tokens(text: str) -> frozenset[str]:
-    return frozenset(w for w in re.findall(r"\w+", text.lower()) if len(w) > 1)
+    """Tokenize text into a set of unique words longer than 1 character."""
+    return frozenset(w for w in _TOKEN_RE.findall(text.lower()) if len(w) > 1)
 
 
 class HeadingIndex:
     """Maps normalised heading text to ``node_id`` values.
 
-    Similarity ranking (for ``search``)
-    ------------------------------------
-    1. Exact normalised match  → score 1.0
-    2. Prefix match            → score 0.8
-    3. Token overlap (Jaccard) → score 0.0–0.6
+    Similarity ranking logic:
+    1. Exact normalised match    → score 1.0
+    2. Prefix match              → score 0.8
+    3. Token overlap (Jaccard)   → score 0.0–0.6
+    
     Nodes below a minimum overlap threshold are excluded.
+
+    Attributes:
+        _node_to_heading: Maps node_id to the last seen heading.
+        _heading_to_nodes: Maps normalised heading to a list of node_ids.
     """
 
     _MIN_OVERLAP = 0.15
 
     def __init__(self) -> None:
-        # normalised_heading → list[node_id]
-        self._heading_to_nodes: dict[str, list[str]] = defaultdict(list)
-        # node_id → normalised_heading (for removal)
         self._node_to_heading: dict[str, str] = {}
+        self._heading_to_nodes: dict[str, list[str]] = defaultdict(list)
 
-    # ── Write operations ───────────────────────────────────────────────────
-
-    def index(self, node_id: str, title: str) -> None:
-        """Register *node_id* under the normalised form of *title*."""
-        if not title:
-            return
-        key = _normalise(title)
-        if not key:
-            return
-        # Deduplicate within the list
-        bucket = self._heading_to_nodes[key]
-        if node_id not in bucket:
-            bucket.append(node_id)
-        self._node_to_heading[node_id] = key
-
-    def remove(self, node_id: str) -> None:
-        """Remove *node_id* from the index."""
-        key = self._node_to_heading.pop(node_id, None)
-        if key and key in self._heading_to_nodes:
-            bucket = self._heading_to_nodes[key]
-            if node_id in bucket:
-                bucket.remove(node_id)
-            if not bucket:
-                del self._heading_to_nodes[key]
-
-    def rebuild(self, heading_items: list[tuple[str, str]]) -> None:
-        """Rebuild the entire index from *(node_id, title)* pairs."""
-        self._heading_to_nodes.clear()
-        self._node_to_heading.clear()
-        for node_id, title in heading_items:
-            self.index(node_id, title)
-
-    # ── Read operations ────────────────────────────────────────────────────
+    def add(self, node_id: str, heading: str) -> None:
+        """Add a heading mapping to the index."""
+        normalised = _normalise(heading)
+        self._node_to_heading[node_id] = heading
+        self._heading_to_nodes[normalised].append(node_id)
 
     def search(self, heading_text: str) -> list[str]:
-        """Return node_ids whose titles best match *heading_text*, ranked.
+        """Search for nodes matching a heading, ranked by similarity.
 
-        Returns an empty list when no heading meets the minimum overlap threshold.
+        Attributes:
+            heading_text: The user-provided heading to search for.
         """
-        if not heading_text:
-            return []
-        query = _normalise(heading_text)
-        if not query:
+        if not (query := _normalise(heading_text)):
             return []
 
         scored: list[tuple[str, float]] = []
@@ -96,7 +73,9 @@ class HeadingIndex:
                 for node_id in node_ids:
                     scored.append((node_id, score))
 
+        # Rank by score descending
         scored.sort(key=lambda x: x[1], reverse=True)
+        
         # Deduplicate while preserving order
         seen: set[str] = set()
         result: list[str] = []
@@ -107,19 +86,22 @@ class HeadingIndex:
         return result
 
     def __len__(self) -> int:
+        """Return the number of tracked headings."""
         return len(self._node_to_heading)
-
-    # ── Private helpers ────────────────────────────────────────────────────
 
     @staticmethod
     def _score(query: str, query_tokens: frozenset[str], key: str) -> float:
+        """Calculate similarity score between query and index key."""
         if query == key:
             return 1.0
         if key.startswith(query) or query.startswith(key):
             return 0.8
+        
         key_tokens = _tokens(key)
-        if not query_tokens or not key_tokens:
+        if not key_tokens or not query_tokens:
             return 0.0
-        intersection = len(query_tokens & key_tokens)
-        union = len(query_tokens | key_tokens)
-        return (intersection / union) * 0.6 if union else 0.0
+            
+        # Jaccard index
+        intersection = query_tokens.intersection(key_tokens)
+        union = query_tokens.union(key_tokens)
+        return len(intersection) / len(union)

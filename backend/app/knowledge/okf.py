@@ -7,8 +7,7 @@ from pathlib import Path
 
 from backend.app.core.hashing import stable_id
 
-
-FRONTMATTER_RE = re.compile(r"\A---\s*\n(.*?)\n---\s*\n?(.*)\Z", re.DOTALL)
+# Link matching regex is fine to keep, but frontmatter regex is removed for speed.
 LINK_RE = re.compile(r"\[[^\]]+\]\(([^)]+\.md)\)")
 
 
@@ -50,30 +49,43 @@ class OkfValidationError(ValueError):
 
 
 def parse_okf_markdown(path: Path) -> ParsedOkfFile:
+    """Reads a file and extracts frontmatter using fast string splitting."""
     text = path.read_text(encoding="utf-8")
-    match = FRONTMATTER_RE.match(text)
-    if not match:
-        return ParsedOkfFile(path=path, metadata={}, body=text, links=_extract_links(text))
-    raw_frontmatter, body = match.groups()
-    metadata = parse_simple_yaml(raw_frontmatter)
-    return ParsedOkfFile(path=path, metadata=metadata, body=body, links=_extract_links(body))
+    
+    # Fast path: strictly check if it starts with standard YAML frontmatter markers
+    if text.startswith("---\n"):
+        # split by '---' at most 2 times. 
+        # parts[0] is empty, parts[1] is frontmatter, parts[2] is body.
+        parts = text.split("---\n", 2)
+        if len(parts) >= 3:
+            raw_frontmatter = parts[1]
+            body = parts[2]
+            metadata = parse_simple_yaml(raw_frontmatter)
+            return ParsedOkfFile(path=path, metadata=metadata, body=body, links=_extract_links(body))
+            
+    # Fallback if no frontmatter exists
+    return ParsedOkfFile(path=path, metadata={}, body=text, links=_extract_links(text))
 
 
 def parse_simple_yaml(raw: str) -> dict[str, object]:
+    """Lightweight hand-rolled YAML parser."""
     result: dict[str, object] = {}
     current_key: str | None = None
     current_list: list[object] | None = None
     current_map: dict[str, object] | None = None
 
     for line in raw.splitlines():
-        if not line.strip() or line.lstrip().startswith("#"):
+        stripped = line.strip()
+        if not stripped or line.lstrip().startswith("#"):
             continue
+            
         if not line.startswith(" ") and ":" in line:
             key, value = line.split(":", 1)
             current_key = key.strip()
             current_map = None
             value = value.strip()
-            if value == "":
+            
+            if not value:
                 current_list = []
                 result[current_key] = current_list
             else:
@@ -84,7 +96,6 @@ def parse_simple_yaml(raw: str) -> dict[str, object]:
         if current_key is None or current_list is None:
             continue
 
-        stripped = line.strip()
         if stripped.startswith("- "):
             item = stripped[2:].strip()
             if ":" in item and not item.startswith("["):
@@ -121,57 +132,78 @@ def render_simple_yaml(metadata: dict[str, object]) -> str:
 
 
 def validate_okf_bundle(root: Path) -> list[OkfValidationIssue]:
-    issues: list[OkfValidationIssue] = []
+    """Validates an entire OKF directory."""
     files = [path for path in root.rglob("*.md") if path.name.lower() != "index.md"]
-    known_relative_paths = {path.relative_to(root).as_posix() for path in files}
-    known_names = {path.name for path in files}
+    parsed_files = [parse_okf_markdown(path) for path in files]
+    return _validate_parsed_files(parsed_files, root)
 
-    for path in files:
-        parsed = parse_okf_markdown(path)
-        relative = path.relative_to(root).as_posix()
+
+def _validate_parsed_files(parsed_files: list[ParsedOkfFile], root: Path) -> list[OkfValidationIssue]:
+    """Core validation logic separated so it can reuse in-memory parsed files."""
+    issues: list[OkfValidationIssue] = []
+    
+    if not parsed_files:
+        return [_issue(str(root), "error", "No Markdown concept files found.")]
+
+    known_relative_paths = {p.path.relative_to(root).as_posix() for p in parsed_files}
+    known_names = {p.path.name for p in parsed_files}
+
+    for parsed in parsed_files:
+        relative = parsed.path.relative_to(root).as_posix()
         metadata = parsed.metadata
         concept_type = metadata.get("type")
+        
         if not concept_type:
             issues.append(_issue(relative, "error", "Missing required OKF frontmatter field: type."))
+            
         if concept_type == "concept":
             if not metadata.get("title"):
                 issues.append(_issue(relative, "error", "Concept files must include title."))
             if not metadata.get("id"):
                 issues.append(_issue(relative, "error", "Concept files must include id."))
+                
         if not parsed.body.strip():
             issues.append(_issue(relative, "warning", "OKF file body is empty."))
-        for field_name in ["tags", "aliases", "related", "depends_on"]:
+            
+        for field_name in ("tags", "aliases", "related", "depends_on"):
             value = metadata.get(field_name, [])
             if value and not isinstance(value, list):
                 issues.append(_issue(relative, "error", f"{field_name} must be a list."))
+                
         for link in parsed.links:
             normalized = _normalize_link(relative, link)
             if normalized not in known_relative_paths and Path(link).name not in known_names:
                 issues.append(_issue(relative, "warning", f"Markdown link target not found: {link}."))
 
-    if not files:
-        issues.append(_issue(str(root), "error", "No Markdown concept files found."))
     return issues
 
 
 def import_okf_bundle(source_root: Path, target_root: Path, *, fail_on_error: bool = True) -> list[OkfConcept]:
-    issues = validate_okf_bundle(source_root)
+    """Imports an OKF bundle, reusing parsed files to prevent double Disk I/O."""
+    files = [path for path in source_root.rglob("*.md") if path.name.lower() != "index.md"]
+    
+    # 1. Parse all files into memory exactly once
+    parsed_files = [parse_okf_markdown(path) for path in files]
+    
+    # 2. Validate the in-memory files
+    issues = _validate_parsed_files(parsed_files, source_root)
     errors = [issue for issue in issues if issue.severity == "error"]
     if errors and fail_on_error:
         raise OkfValidationError(errors)
 
+    # 3. Import and copy
     concepts: list[OkfConcept] = []
-    for source_path in source_root.rglob("*.md"):
-        if source_path.name.lower() == "index.md":
-            continue
-        parsed = parse_okf_markdown(source_path)
+    for parsed in parsed_files:
         if parsed.metadata.get("type") != "concept":
             continue
-        relative = source_path.relative_to(source_root)
+            
+        relative = parsed.path.relative_to(source_root)
         target_path = target_root / relative
         target_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source_path, target_path)
+        shutil.copy2(parsed.path, target_path)
+        
         concepts.append(concept_from_parsed(target_path, parsed))
+        
     return concepts
 
 
@@ -181,6 +213,7 @@ def concept_from_parsed(path: Path, parsed: ParsedOkfFile | None = None) -> OkfC
     title = str(metadata.get("title") or path.stem.replace("-", " ").title())
     slug = str(metadata.get("slug") or path.stem)
     concept_id = str(metadata.get("id") or stable_id("concept", slug, parsed.body))
+    
     source_chunk_ids = _string_list(metadata.get("source_chunk_ids"))
     if not source_chunk_ids:
         source_chunk_ids = [
@@ -188,6 +221,7 @@ def concept_from_parsed(path: Path, parsed: ParsedOkfFile | None = None) -> OkfC
             for item in _dict_list(metadata.get("source_chunks"))
             if item.get("chunk_id")
         ]
+        
     text = f"# {title}\n\n{parsed.body.strip()}".strip()
     return OkfConcept(
         concept_id=concept_id,
@@ -239,7 +273,7 @@ def _format_scalar(value: object) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
     text = str(value)
-    if text == "" or any(char in text for char in [":", "#", "[", "]", "{", "}"]):
+    if not text or any(char in text for char in (":", "#", "[", "]", "{", "}")):
         return '"' + text.replace('"', '\\"') + '"'
     return text
 

@@ -17,103 +17,97 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
-from backend.app.ingestion.layout_parser import LayoutNode
-
+if TYPE_CHECKING:
+    from backend.app.ingestion.layout_parser import LayoutNode
 
 # ── Compiled patterns (created once at module load) ────────────────────────
-
+_SENTENCE_END = re.compile(r"[.!?]$")
 _NUMBER_PATTERNS = [
-    re.compile(r"^\s*\d+\.\d+\.\d+[\s\.]"),        # 1.2.3  → depth 3
-    re.compile(r"^\s*\d+\.\d+[\s\.]"),             # 1.2    → depth 2
-    re.compile(r"^\s*\d+[\s\.]"),                  # 1.     → depth 1
-    re.compile(r"^\s*(chapter|section|part)\s+\w+", re.IGNORECASE),  # depth 1
-    re.compile(r"^\s*[IVXLCDM]+[\s\.]"),           # Roman  → depth 1
+    re.compile(r"^\s*\d+\.\d+\.\d+[\s\.]"),
+    re.compile(r"^\s*\d+\.\d+[\s\.]"),
+    re.compile(r"^\s*\d+[\s\.]"),
+    re.compile(r"^\s*(chapter|section|part)\s+\w+", re.IGNORECASE),
 ]
-_NUMBER_DEPTHS = [3, 2, 1, 1, 1]  # depth per pattern above
+_NUMBER_DEPTHS = [3, 2, 1, 1]
 
-_CAPS_RE = re.compile(r"^[A-Z\d\s\W]{3,60}$")  # ALL-CAPS short line
-_SENTENCE_END = re.compile(r"[.!?,;]$")
+# ── Scoring Weights ────────────────────────────────────────────────────────
+_THRESHOLD = 0.5
+_W_NUMBERING = 0.9
+_W_ALL_CAPS = 0.7
+_W_FONT_SIZE = 0.6
+_W_BOLD = 0.5
+_W_SHORT_LINE = 0.2
+_W_SPACING = 0.25
+_W_LOW_INDENT = 0.1
+_W_LONG_PARA_PENALTY = -0.4
 
 
-@dataclass(slots=True)
+@dataclass
 class HeadingResult:
-    """Classification result for a single LayoutNode."""
+    """The outcome of a layout node classification.
+
+    Attributes:
+        is_heading: Boolean classification.
+        depth:      Inferred hierarchy level (1–3).
+        score:      Raw confidence score from the weighted system.
+    """
     is_heading: bool
-    depth: int       # 1 = chapter, 2 = section, 3 = subsection; 0 = body
-    score: float     # raw signal score (useful for debugging)
+    depth: int
+    score: float
 
 
 class HeadingDetector:
-    """Classifies ``LayoutNode`` objects as headings or body text.
+    """Classifies LayoutNodes as headings or body text."""
 
-    Args:
-        body_font_size_baseline: Estimated body font size used for relative
-            size comparisons.  When ``None``, the detector auto-estimates
-            it from the median font size of the provided nodes.
-    """
+    def __init__(self, threshold: float = _THRESHOLD) -> None:
+        self._HEADING_THRESHOLD = threshold
 
-    _HEADING_THRESHOLD = 0.50
-    _SIZE_RATIO = 1.20   # font must be 20% larger than body to score
+    def detect(self, node: LayoutNode, baseline_size: float) -> HeadingResult:
+        """Score a node and classify it as a heading or body text.
 
-    def __init__(self, body_font_size_baseline: float | None = None) -> None:
-        self._body_baseline = body_font_size_baseline
-
-    def detect(self, nodes: list[LayoutNode]) -> list[HeadingResult]:
-        """Classify all *nodes*, returning one ``HeadingResult`` per node."""
-        baseline = self._body_baseline or self._estimate_baseline(nodes)
-        return [self._classify(node, baseline) for node in nodes]
-
-    # ── Private helpers ────────────────────────────────────────────────────
-
-    def _classify(self, node: LayoutNode, baseline: float) -> HeadingResult:
-        text = node.text.strip()
-        if not text:
-            return HeadingResult(is_heading=False, depth=0, score=0.0)
-
+        Attributes:
+            node:          The layout node to inspect.
+            baseline_size: The median font size of the document (for comparison).
+        """
         score = 0.0
-        depth = 1  # default depth when heading signals fire
+        depth = self._numbering_depth(node.text)
 
-        # 1. Numbering pattern (highest weight)
-        numbering_depth = self._numbering_depth(text)
-        if numbering_depth > 0:
-            score += 0.90
-            depth = numbering_depth
+        # 1. Numbering pattern (Strongest signal)
+        if depth > 0:
+            score += _W_NUMBERING
 
         # 2. ALL-CAPS short line
-        if _CAPS_RE.match(text) and len(text.split()) <= 8:
-            score += 0.70
+        text = node.text.strip()
+        if text.isupper() and len(text.split()) <= 12:
+            score += _W_ALL_CAPS
 
-        # 3. Font size > 120% body baseline
-        if node.font_size and baseline and node.font_size >= baseline * self._SIZE_RATIO:
-            score += 0.60
-            # Larger font → likely higher-level heading
-            ratio = node.font_size / baseline
-            if ratio >= 1.6:
-                depth = min(depth, 1)
-            elif ratio >= 1.35:
-                depth = min(depth, 2)
+        # 3. Relative font size
+        if node.font_size and baseline_size > 0:
+            if node.font_size > (baseline_size * 1.2):
+                score += _W_FONT_SIZE
 
-        # 4. Bold font
+        # 4. Bold flag
         if node.is_bold:
-            score += 0.50
+            score += _W_BOLD
 
-        # 5. Short line (< 12 words, does not end in sentence-terminal punctuation)
+        # 5. Short line (< 12 words) and no terminal punctuation
         words = text.split()
         if len(words) <= 12 and not _SENTENCE_END.search(text):
-            score += 0.20
+            score += _W_SHORT_LINE
 
-        # 6. Large spacing is a useful plain-text/Docling proxy for blank lines.
+        # 6. Spacing check
         if node.line_spacing >= 18.0:
-            score += 0.25
+            score += _W_SPACING
 
-        # 7. Subtract for long paragraphs (unlikely to be headings)
+        # 7. Length penalty (Long paragraphs are rarely headings)
         if len(words) > 20:
-            score -= 0.40
+            score += _W_LONG_PARA_PENALTY
 
-        # 8. Low indent (top-level sections usually start at left margin)
+        # 8. Low indent
         if node.indent < 10.0:
-            score += 0.10
+            score += _W_LOW_INDENT
 
         is_heading = score >= self._HEADING_THRESHOLD
         return HeadingResult(
@@ -131,12 +125,7 @@ class HeadingDetector:
         return 0
 
     @staticmethod
-    def _estimate_baseline(nodes: list[LayoutNode]) -> float:
-        """Median font size across nodes that have font metadata."""
-        sizes = sorted(
-            n.font_size for n in nodes if n.font_size and n.font_size > 0
-        )
-        if not sizes:
-            return 12.0  # typical default body font size
-        mid = len(sizes) // 2
-        return sizes[mid]
+    def estimate_baseline(nodes: list[LayoutNode]) -> float:
+        """Calculate median font size for nodes that have metadata."""
+        sizes = sorted(n.font_size for n in nodes if n.font_size and n.font_size > 0)
+        return float(sizes[len(sizes) // 2]) if sizes else 12.0

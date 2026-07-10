@@ -4,6 +4,7 @@ Requirements: 21.7
 """
 from __future__ import annotations
 
+from datetime import datetime
 from pydantic import BaseModel, Field
 
 
@@ -18,7 +19,8 @@ class SessionOut(BaseModel):
 
     session_id: str = Field(..., description="Stable session identifier")
     title: str = Field(..., description="Human-readable session title")
-    created_at: str = Field(default="", description="ISO-8601 creation timestamp")
+    # OPTIMIZATION: Using datetime enforces ISO-8601 validation at the schema level.
+    created_at: datetime = Field(..., description="ISO-8601 creation timestamp")
 
     model_config = {"from_attributes": True}
 

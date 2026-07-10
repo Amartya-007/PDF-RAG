@@ -1,31 +1,37 @@
 from __future__ import annotations
 
-import os
-from dataclasses import dataclass
 from pathlib import Path
+from functools import lru_cache
+from pydantic import Field, HttpUrl, DirectoryPath
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
+class Settings(BaseSettings):
+    """Application settings, populated from environment variables."""
+    
+    # Environment variable prefix (e.g., RAG_DATA_DIR matches data_dir)
+    model_config = SettingsConfigDict(env_prefix="RAG_", env_file=".env", extra="ignore")
 
-def _bool_env(name: str, default: bool) -> bool:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    return raw.strip().lower() in {"1", "true", "yes", "on"}
+    # Paths
+    data_dir: DirectoryPath = Field(default=Path("backend/data"))
+    
+    # SQLite
+    sqlite_path_value: str = Field(default="metadata.sqlite3", alias="RAG_SQLITE_PATH")
 
+    # Models & URLs
+    ollama_base_url: HttpUrl = Field(default="http://localhost:11434")
+    generation_model: str = Field(default="llama3.2")
+    development_model: str = Field(default="llama3.2")
+    active_model: str = Field(default="llama3.2")
 
-@dataclass(frozen=True)
-class Settings:
-    data_dir: Path
-    sqlite_path_value: str
-    ollama_base_url: str
-    generation_model: str
-    development_model: str
-    active_model: str
-    sparse_top_k: int
-    final_context_chunks: int
-    temperature: float
-    use_ollama: bool
-    force_ocr: bool
-    use_tree_search: bool
+    # Numerical Settings with Validation
+    sparse_top_k: int = Field(default=40, gt=0)
+    final_context_chunks: int = Field(default=8, gt=0)
+    temperature: float = Field(default=0.1, ge=0.0, le=1.0)
+
+    # Boolean flags (Pydantic handles 'true', '1', 'yes', 'on' automatically)
+    use_ollama: bool = Field(default=False)
+    force_ocr: bool = Field(default=False)
+    use_tree_search: bool = Field(default=True)
 
     @property
     def documents_dir(self) -> Path:
@@ -47,29 +53,15 @@ class Settings:
     def sqlite_path(self) -> Path | str:
         if self.sqlite_path_value == ":memory:":
             return ":memory:"
-        return Path(self.sqlite_path_value).resolve()
+        return (self.data_dir / self.sqlite_path_value).resolve()
 
-
+@lru_cache
 def get_settings() -> Settings:
-    data_dir = Path(os.getenv("RAG_DATA_DIR", "backend/data")).resolve()
-    sqlite_path = os.getenv("RAG_SQLITE_PATH", str(data_dir / "metadata.sqlite3"))
-    return Settings(
-        data_dir=data_dir,
-        sqlite_path_value=sqlite_path,
-        ollama_base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
-        generation_model=os.getenv("RAG_GENERATION_MODEL", "llama3.2"),
-        development_model=os.getenv("RAG_DEVELOPMENT_MODEL", "llama3.2"),
-        active_model=os.getenv("RAG_ACTIVE_MODEL", os.getenv("RAG_DEVELOPMENT_MODEL", "llama3.2")),
-        sparse_top_k=int(os.getenv("RAG_SPARSE_TOP_K", "40")),
-        final_context_chunks=int(os.getenv("RAG_FINAL_CONTEXT_CHUNKS", "8")),
-        temperature=float(os.getenv("RAG_TEMPERATURE", "0.1")),
-        use_ollama=_bool_env("RAG_USE_OLLAMA", False),
-        force_ocr=_bool_env("RAG_FORCE_OCR", False),
-        use_tree_search=_bool_env("RAG_USE_TREE_SEARCH", True),
-    )
-
+    """Returns a cached settings object."""
+    return Settings()
 
 def ensure_data_dirs(settings: Settings) -> None:
+    """Ensures that required data directories exist."""
     for path in [
         settings.data_dir,
         settings.documents_dir,

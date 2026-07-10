@@ -10,58 +10,81 @@ import json
 import logging
 import urllib.error
 import urllib.request
+from typing import TYPE_CHECKING, Any
 
 from backend.app.core.config import Settings
 from backend.app.domain.exceptions import GenerationError
+
+if TYPE_CHECKING:
+    import ollama
 
 logger = logging.getLogger(__name__)
 
 
 class OllamaClient:
+    """Client for generating text using the Ollama API."""
+
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        self._client: object = None  # lazy ollama.Client
+        self._client: ollama.Client | None = None
+        self._sdk_available: bool | None = None
 
-    def _get_client(self) -> object:
+    def _get_client(self) -> ollama.Client | None:
+        """Lazily initialize the Ollama SDK client."""
+        if self._sdk_available is False:
+            return None
+        
         if self._client is None:
             try:
-                import ollama  # type: ignore
+                import ollama
                 self._client = ollama.Client(host=self.settings.ollama_base_url)
+                self._sdk_available = True
                 logger.debug("Using ollama SDK client")
             except ImportError:
-                self._client = False
+                self._sdk_available = False
                 logger.debug("ollama SDK not available; using urllib fallback")
+        
         return self._client
 
     def generate(self, prompt: str) -> str:
-        client = self._get_client()
-        if client:
+        """Generate a response from the model.
+
+        Attributes:
+            prompt: The full prompt string for the model.
+        """
+        if client := self._get_client():
             return self._generate_sdk(client, prompt)
         return self._generate_urllib(prompt)
 
-    def _generate_sdk(self, client: object, prompt: str) -> str:
+    def _generate_sdk(self, client: ollama.Client, prompt: str) -> str:
+        """Internal helper for SDK-based generation."""
         try:
-            response = client.generate(  # type: ignore[union-attr]
+            response = client.generate(
                 model=self.settings.active_model,
                 prompt=prompt,
                 stream=False,
-                keep_alive=600,  # 10 min keep-alive in memory
+                keep_alive=600,
                 options={
                     "temperature": self.settings.temperature,
-                    "num_ctx": 3072,    # evidence already trimmed to ~90w × 4 sources
-                    "num_predict": 384, # ~300 word cap, fast on limited VRAM
+                    "num_ctx": 3072,
+                    "num_predict": 384,
                 },
             )
-            text = response.response if hasattr(response, "response") else response.get("response", "")
+            
+            # response is a dictionary-like object in the SDK
+            text = response.get("response") if isinstance(response, dict) else getattr(response, "response", "")
+            
             if not isinstance(text, str):
-                raise GenerationError("Ollama SDK response missing text")
+                raise GenerationError("Ollama SDK response missing expected text field")
             return text.strip()
+            
         except Exception as exc:
-            if "GenerationError" in type(exc).__name__:
+            if isinstance(exc, GenerationError):
                 raise
             raise GenerationError(f"Ollama SDK generate failed: {exc}") from exc
 
     def _generate_urllib(self, prompt: str) -> str:
+        """Internal helper for standard library-based fallback generation."""
         payload = json.dumps({
             "model": self.settings.active_model,
             "prompt": prompt,
@@ -73,17 +96,20 @@ class OllamaClient:
                 "num_predict": 384,
             },
         }).encode("utf-8")
+        
         request = urllib.request.Request(
             f"{self.settings.ollama_base_url.rstrip('/')}/api/generate",
             data=payload,
             headers={"Content-Type": "application/json"},
             method="POST",
         )
+        
         try:
             with urllib.request.urlopen(request, timeout=180) as response:
                 data = json.loads(response.read().decode("utf-8"))
         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
             raise GenerationError(f"Ollama urllib generate failed: {exc}") from exc
+            
         answer = data.get("response")
         if not isinstance(answer, str):
             raise GenerationError("Ollama response did not include generated text.")
