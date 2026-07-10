@@ -1,8 +1,0 @@
-{
-  "python.defaultInterpreterPath": "C:\\Users\\Windows 11\\AppData\\Local\\Microsoft\\WindowsApps\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\python.exe",
-  "python.analysis.extraPaths": [
-    "${workspaceFolder}"
-  ],
-  "python.terminal.activateEnvironment": false,
-  "python-envs.defaultEnvManager": "ms-python.python:system"
-}
