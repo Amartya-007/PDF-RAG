@@ -34,6 +34,12 @@ def _jaccard(a: frozenset[str], b: frozenset[str]) -> float:
     return inter / union if union else 0.0
 
 
+def _recall(query_tokens: frozenset[str], text_tokens: frozenset[str]) -> float:
+    if not query_tokens:
+        return 0.0
+    return len(query_tokens & text_tokens) / len(query_tokens)
+
+
 @dataclass(slots=True)
 class RankingResult:
     node: DocumentNode
@@ -61,6 +67,7 @@ class NodeRanker:
 
     def __init__(self, max_page: int = 500) -> None:
         self._max_page = max(max_page, 1)
+        self._last_details: dict[str, dict[str, float]] = {}
 
     # ── Public API ─────────────────────────────────────────────────────────
 
@@ -92,6 +99,7 @@ class NodeRanker:
             for node in candidates
         ]
         results.sort(key=lambda r: r.score, reverse=True)
+        self._remember_results(results)
         return results[:top_k] if top_k is not None else results
 
     def rerank(
@@ -104,6 +112,47 @@ class NodeRanker:
         """Convenience wrapper — returns plain ``DocumentNode`` list."""
         ranked = self.rank(query, candidates, tree_selected_ids, top_k)
         return [r.node for r in ranked]
+
+    def rank_fast_fact(
+        self,
+        question: str,
+        nodes: list[DocumentNode],
+        candidate_ids: set[str],
+    ) -> list[DocumentNode]:
+        """Rank structured-field lookup candidates without embeddings."""
+        results = [
+            self._score_specialized_node(
+                node,
+                question,
+                candidate_ids,
+                mode="fast_fact",
+            )
+            for node in nodes
+        ]
+        results.sort(key=lambda item: item[0], reverse=True)
+        return [node for _score, node in results]
+
+    def rank_topic(
+        self,
+        question: str,
+        nodes: list[DocumentNode],
+        candidate_ids: set[str],
+    ) -> list[DocumentNode]:
+        """Rank topic/explanation candidates without embeddings."""
+        results = [
+            self._score_specialized_node(
+                node,
+                question,
+                candidate_ids,
+                mode="topic",
+            )
+            for node in nodes
+        ]
+        results.sort(key=lambda item: item[0], reverse=True)
+        return [node for _score, node in results]
+
+    def score_details(self, node_id: str) -> dict[str, float]:
+        return self._last_details.get(node_id, {})
 
     # ── Private helpers ────────────────────────────────────────────────────
 
@@ -137,6 +186,104 @@ class NodeRanker:
             signal_source=source,
             signal_page=page,
             signal_density=density,
+        )
+
+    def _score_specialized_node(
+        self,
+        node: DocumentNode,
+        question: str,
+        candidate_ids: set[str],
+        mode: str,
+    ) -> tuple[float, DocumentNode]:
+        question_tokens = _token_set(question)
+        node_tokens = _token_set(" ".join([node.title or "", node.text]))
+        overlap = _recall(question_tokens, node_tokens)
+        heading = self._heading_match(question, node.title)
+        retrieval_hit = 1.0 if node.id in candidate_ids else 0.0
+        page = self._page_score(node.page_start)
+        density = self._density_score(node.text)
+
+        fast_fact_score = self._fast_fact_signal(question_tokens, node_tokens)
+        topic_score = self._topic_signal(question, question_tokens, node)
+
+        if mode == "fast_fact":
+            score = (
+                0.35 * overlap
+                + 0.25 * fast_fact_score
+                + 0.20 * retrieval_hit
+                + 0.10 * heading
+                + 0.05 * page
+                + 0.05 * density
+            )
+        else:
+            score = (
+                0.35 * topic_score
+                + 0.25 * heading
+                + 0.20 * overlap
+                + 0.10 * retrieval_hit
+                + 0.05 * page
+                + 0.05 * density
+            )
+
+        self._last_details[node.id] = {
+            "score": round(score, 4),
+            "overlap": overlap,
+            "heading_score": heading,
+            "retrieval_hit": retrieval_hit,
+            "page_score": page,
+            "density_score": density,
+            "fast_fact_score": fast_fact_score,
+            "topic_score": topic_score,
+        }
+        return (score, node)
+
+    def _remember_results(self, results: list[RankingResult]) -> None:
+        self._last_details = {
+            result.node.id: {
+                "score": result.score,
+                "overlap": result.signal_overlap,
+                "heading_score": result.signal_heading,
+                "retrieval_hit": result.signal_source,
+                "page_score": result.signal_page,
+                "density_score": result.signal_density,
+                "fast_fact_score": 0.0,
+                "topic_score": result.signal_overlap + result.signal_heading,
+            }
+            for result in results
+        }
+
+    @staticmethod
+    def _fast_fact_signal(
+        question_tokens: frozenset[str],
+        node_tokens: frozenset[str],
+    ) -> float:
+        fast_terms = {
+            "name", "college", "collage", "institute", "university", "school",
+            "degree", "course", "branch", "program", "cgpa", "gpa", "email",
+            "phone", "mobile", "contact",
+        }
+        matched_query_terms = question_tokens & fast_terms
+        if not matched_query_terms:
+            return 0.0
+        synonym_hits = 0.0
+        if {"college", "collage"} & matched_query_terms and {
+            "college", "institute", "university", "school",
+        } & node_tokens:
+            synonym_hits = 1.0
+        if "name" in matched_query_terms and len(node_tokens) >= 2:
+            synonym_hits = max(synonym_hits, 0.5)
+        return min(1.0, _recall(matched_query_terms, node_tokens) + synonym_hits)
+
+    def _topic_signal(
+        self,
+        question: str,
+        question_tokens: frozenset[str],
+        node: DocumentNode,
+    ) -> float:
+        node_tokens = _token_set(" ".join([node.title or "", node.text]))
+        return max(
+            _recall(question_tokens, node_tokens),
+            self._heading_match(question, node.title),
         )
 
     @staticmethod

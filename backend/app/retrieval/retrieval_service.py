@@ -3,7 +3,7 @@
 Pipeline per query
 ------------------
 1. LexicalRetriever    → (node_id, score) list via FTS5 + Heading + Phrase RRF
-2. TreeNavigator       → DocumentNode list via LLM-driven tree traversal
+2. TreeNavigator       → deterministic parent/sibling/child expansion
 3. Merge               → deduplicated union, tree nodes first
 4. NodeRanker          → sort merged candidates by pure text signals
 5. ConfidenceGate      → abort with InsufficientEvidenceError if score too low
@@ -45,7 +45,7 @@ class RetrievalService:
     Args:
         node_repo:      Source of truth for DocumentNode records.
         lexical:        FTS5 + heading + phrase retriever.
-        navigator:      LLM-driven tree traversal (may be None → offline).
+        navigator:      Deterministic hierarchy expansion.
         ranker:         Pure-text candidate reranker.
         gate:           Confidence threshold check before generation.
         top_k:          Maximum nodes returned.
@@ -101,13 +101,22 @@ class RetrievalService:
         # 1. Lexical retrieval
         session_node_ids = self._session_node_ids(session_id)
         lexical_hits = self._lexical.search(
-            query, self._lexical_top_k, session_node_ids
+            query,
+            session_id=session_id,
+            top_k=self._lexical_top_k,
+            session_node_ids=session_node_ids,
         )
         lexical_ids  = {nid for nid, _ in lexical_hits}
 
-        # 2. Tree navigation (LLM-driven, may be a no-op when navigator has no LLM)
-        trees = self._build_trees(session_id)
-        tree_nodes = self._navigator.navigate(query, trees, cancelled)
+        # 2. Tree navigation: deterministic context expansion around lexical hits
+        matched_nodes = self._repo.get_many([node_id for node_id, _score in lexical_hits])
+        if not matched_nodes:
+            matched_nodes = (
+                self._repo.list_nodes_for_session(session_id)
+                if session_id
+                else self._repo.list_all_nodes()
+            )
+        tree_nodes = self._navigator.expand(matched_nodes, self._repo)
         tree_ids   = {n.id for n in tree_nodes}
 
         # 3. Merge: tree nodes first, then lexical-only hits
@@ -162,16 +171,3 @@ class RetrievalService:
             return None
         return {n.id for n in self._repo.list_nodes_for_session(session_id)}
 
-    def _build_trees(
-        self, session_id: str | None
-    ) -> dict[str, list[DocumentNode]]:
-        """Load all nodes grouped by document_id for TreeNavigator."""
-        nodes = (
-            self._repo.list_nodes_for_session(session_id)
-            if session_id
-            else self._repo.list_all_nodes()
-        )
-        trees: dict[str, list[DocumentNode]] = {}
-        for node in nodes:
-            trees.setdefault(node.document_id, []).append(node)
-        return trees

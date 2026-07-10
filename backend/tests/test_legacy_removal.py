@@ -22,6 +22,9 @@ def _active_text_files() -> list[Path]:
         "backend/.test-tmp",
         "backend/__pycache__",
         "backend/data",
+        "build",
+        "dist",
+        "local_pdf_rag.egg-info",
     }
     ignored_files = {
         "backend/tests/test_legacy_removal.py",

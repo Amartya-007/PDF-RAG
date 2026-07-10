@@ -1,216 +1,53 @@
 # Running Local PDF RAG
 
-This app is a Windows-first offline desktop PDF RAG product. The normal user interface is the PySide6 desktop app. No Next.js, React, hosted server, or internet connection is required during normal use after setup.
+The current project is a vectorless backend-first PDF RAG application.
 
-## 1. Recommended: Run the Built Windows App
-
-From the project root:
+## Install
 
 ```powershell
 cd D:\PDF-RAG
-& "D:\PDF-RAG\dist\Local PDF RAG\Local PDF RAG.exe"
+uv venv .venv --python 3.12
+.venv\Scripts\Activate.ps1
+uv pip install -r requirements.txt
+uv pip install -e ".[backend,dev]"
 ```
 
-Or open this file directly in Explorer:
-
-```text
-D:\PDF-RAG\dist\Local PDF RAG\Local PDF RAG.exe
-```
-
-Do not run the executable under `D:\PDF-RAG\build\...`. The `build` folder is only a temporary PyInstaller work directory and can fail with Python DLL errors.
-
-Use the app like this:
-
-1. Click `Settings`.
-2. Confirm Ollama status and selected models.
-3. Choose a chat/project from the left panel, or click `New Chat`.
-4. Click `Import PDFs / Text`.
-5. Select one or more PDF or text files.
-6. Wait until the documents show `[ready]`.
-7. Ask a question in the chat box.
-8. Check the right-side citations panel for source filename, page, chunk ID, and excerpt.
-
-If a previous import is stuck or failed, click `Repair Stuck Imports`.
-
-Old uploads are kept in `Legacy Chat`. New chats start with an empty document list and only search PDFs imported into that chat.
-
-## 2. Run From Source
-
-Use `py`, not plain `python`, because this machine has Python 3.13 available through the Python launcher.
+For optional OCR support:
 
 ```powershell
-cd D:\PDF-RAG
-py --version
-py -m pip install -e .[desktop]
-py -m desktop.app
+uv pip install -e ".[pdf]"
 ```
 
-This is the best way to debug. The terminal prints ingestion, parsing, chunking, indexing, retrieval, and answer timing logs.
+## Optional Ollama Setup
 
-If PowerShell complains about the `[desktop]` extra, wrap it in quotes:
-
-```powershell
-py -m pip install -e ".[desktop]"
-```
-
-## 3. Ollama Setup
-
-Ollama is optional for fallback testing, but recommended for real local AI answers and embeddings.
-
-Install Ollama once, then pull models while online:
+Ollama is used for answer synthesis when enabled. Retrieval remains lexical.
 
 ```powershell
 ollama pull qwen3.5:4b
-ollama pull qwen3-embedding:4b
+$env:RAG_USE_OLLAMA = "1"
+$env:RAG_ACTIVE_MODEL = "qwen3.5:4b"
 ```
 
-Optional larger model:
+## Run Tests
 
 ```powershell
-ollama pull qwen3.5:9b
+.venv\Scripts\python.exe -m pytest backend\tests
 ```
 
-Start or confirm Ollama:
+## Developer Server
 
 ```powershell
-ollama list
+.venv\Scripts\python.exe -m uvicorn backend.app.api.main:app --reload
 ```
 
-Default desktop settings:
+## Data
+
+By default, local data is stored under `backend/data`:
 
 ```text
-Ollama URL: http://localhost:11434
-Active model: qwen3.5:4b
-Embedding model: qwen3-embedding:4b
+documents/          uploaded source copies
+indexes/            lexical and OKF-compatible index files
+knowledge/          generated OKF Markdown
+metadata.sqlite3    SQLite metadata and nodes
+trees/              optional tree artifacts
 ```
-
-Inside the app, open `Settings` to select any installed Ollama model.
-
-## 4. Offline Use
-
-After Ollama and the models are installed, the app can run offline:
-
-```powershell
-cd D:\PDF-RAG
-.\dist\"Local PDF RAG"\"Local PDF RAG.exe"
-```
-
-The app keeps user data locally under:
-
-```text
-C:\Users\Windows 11\AppData\Local\Local PDF RAG\data
-```
-
-This includes imported PDFs, SQLite metadata, local indexes, generated OKF Markdown, settings, and logs.
-
-Generated files are stored here:
-
-```text
-PDF copies:       C:\Users\Windows 11\AppData\Local\Local PDF RAG\data\documents
-Vector index:     C:\Users\Windows 11\AppData\Local\Local PDF RAG\data\indexes\vectors.json
-BM25 index:       C:\Users\Windows 11\AppData\Local\Local PDF RAG\data\indexes\bm25.json
-OKF Markdown:     C:\Users\Windows 11\AppData\Local\Local PDF RAG\data\knowledge\concepts
-SQLite metadata:  C:\Users\Windows 11\AppData\Local\Local PDF RAG\data\metadata.sqlite3
-```
-
-## 5. Developer Commands
-
-Run tests:
-
-```powershell
-cd D:\PDF-RAG
-py -m unittest discover backend/tests
-```
-
-Run the CLI:
-
-```powershell
-py -m backend.app.cli init
-py -m backend.app.cli ingest .\some-document.pdf
-py -m backend.app.cli ask "What is this document about?"
-```
-
-Run the FastAPI developer server:
-
-```powershell
-py -m pip install -e .[backend]
-py -m uvicorn backend.app.api.main:app --reload
-```
-
-## 6. Build the Windows Executable
-
-Close the desktop app before rebuilding, otherwise Windows may lock packaged DLL files.
-
-```powershell
-cd D:\PDF-RAG
-py -m pip install -e .[desktop]
-py -m PyInstaller desktop/packaging/local_pdf_rag_desktop.spec --clean -y
-```
-
-The rebuilt executable will be here:
-
-```text
-D:\PDF-RAG\dist\Local PDF RAG\Local PDF RAG.exe
-```
-
-## 7. Common Problems
-
-### PySide6 Import Error in VS Code
-
-Make sure VS Code is using Python 3.13 from:
-
-```text
-C:\Users\Windows 11\AppData\Local\Microsoft\WindowsApps\python3.exe
-```
-
-Then install desktop dependencies:
-
-```powershell
-cd D:\PDF-RAG
-py -m pip install -e .[desktop]
-```
-
-### PDF Parsing Error
-
-Install the desktop or PDF dependencies:
-
-```powershell
-py -m pip install -e .[desktop]
-```
-
-For stronger optional PDF parsing/OCR support:
-
-```powershell
-py -m pip install -e .[pdf]
-```
-
-### Ollama Is Disabled
-
-Open `Settings` in the desktop app and enable Ollama. Then confirm the selected models are installed with:
-
-```powershell
-ollama list
-```
-
-If a model is missing:
-
-```powershell
-ollama pull qwen3.5:4b
-ollama pull qwen3-embedding:4b
-```
-
-### App Is Slow
-
-Use a smaller active model first:
-
-```text
-qwen3.5:4b
-```
-
-Also make sure the embedding model is already pulled locally:
-
-```powershell
-ollama pull qwen3-embedding:4b
-```
-
-The first question after starting Ollama can still be slow because Ollama may need to load the model into memory. Simple resume-style fact questions such as name, college, degree, CGPA, email, and phone now use a fast local text-search path and should not need LLM generation.

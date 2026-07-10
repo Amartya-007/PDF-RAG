@@ -1,8 +1,8 @@
-"""OllamaAnswerer — streaming LLM generation via llama3.2.
+"""OllamaAnswerer — streaming LLM generation via Ollama.
 
 Wraps OllamaClient to provide both a blocking ``answer()`` and an
-incremental ``answer_stream()`` that yields text fragments for the desktop
-UI's token-streaming pipeline.
+incremental ``answer_stream()`` that yields text fragments for the web
+token-streaming pipeline.
 
 Context assembly
 ----------------
@@ -19,11 +19,11 @@ The answerer receives pre-ranked ``DocumentNode`` objects from
 Then passes the block + user question to ``build_answer_prompt()`` and
 streams the response token by token.
 
-Citation extraction
+Citation validation
 -------------------
-After generation completes, ``CitationValidator.extract()`` scans the
-generated text for ``[S1]``, ``[S2]``, … reference markers and maps them
-back to the originating ``DocumentNode``.
+After generation completes, ``CitationValidator`` verifies that the cited
+text supports the generated answer. Invalid generated answers fall back to
+pure extractive answering.
 
 Error handling
 --------------
@@ -38,9 +38,11 @@ from collections.abc import Iterator
 
 from backend.app.domain.exceptions import AnswerGenerationError
 from backend.app.domain.models.node import DocumentNode
+from backend.app.generation.extractive_answerer import ExtractiveAnswerer
 from backend.app.generation.ollama_client import GenerationError, OllamaClient
 from backend.app.generation.prompts import build_answer_prompt
 from backend.app.models import Answer, Citation
+from backend.app.verification.citation_validator import CitationValidator
 
 logger = logging.getLogger(__name__)
 
@@ -57,11 +59,11 @@ def _build_evidence_block(nodes: list[DocumentNode]) -> tuple[str, list[tuple[st
     lines: list[str] = []
     references: list[tuple[str, DocumentNode]] = []
     for i, node in enumerate(nodes, start=1):
-        source_id = f"[S{i}]"
+        source_id = f"S{i}"
         page_info = f"page {node.page_start}"
         if node.page_end and node.page_end != node.page_start:
             page_info = f"pages {node.page_start}–{node.page_end}"
-        lines.append(f"{source_id} {node.document_id}, {page_info}")
+        lines.append(f"[{source_id}] {node.document_id}, {page_info}")
         lines.append(_truncate(node.text, _MAX_NODE_WORDS))
         lines.append("")
         references.append((source_id, node))
@@ -76,10 +78,11 @@ def _nodes_to_citations(
     citations: list[Citation] = []
     seen: set[str] = set()
     for source_id, node in references:
-        if source_id in generated_text and source_id not in seen:
+        if f"[{source_id}]" in generated_text and source_id not in seen:
             seen.add(source_id)
             citations.append(Citation(
                 source_id=source_id,
+                document_id=node.document_id,
                 chunk_id=node.id,
                 filename=node.document_id,
                 page_start=node.page_start,
@@ -96,8 +99,15 @@ class OllamaAnswerer:
         client: Configured ``OllamaClient`` instance.
     """
 
-    def __init__(self, client: OllamaClient) -> None:
+    def __init__(
+        self,
+        client: OllamaClient,
+        extractive: ExtractiveAnswerer | None = None,
+        validator: CitationValidator | None = None,
+    ) -> None:
         self._client = client
+        self._extractive = extractive or ExtractiveAnswerer()
+        self._validator = validator or CitationValidator()
 
     # ── Blocking ───────────────────────────────────────────────────────────
 
@@ -115,6 +125,9 @@ class OllamaAnswerer:
             raise AnswerGenerationError(str(exc)) from exc
 
         citations = _nodes_to_citations(text, references)
+        if not self._validator.validate(text, citations):
+            return self._extractive.answer(question, nodes)
+
         return Answer(
             question=question,
             answer=text,
@@ -157,6 +170,11 @@ class OllamaAnswerer:
 
         full_text = "".join(accumulated).strip()
         citations = _nodes_to_citations(full_text, references)
+        if full_text and not self._validator.validate(full_text, citations):
+            fallback = self._extractive.answer(question, nodes)
+            yield fallback
+            return
+
         yield Answer(
             question=question,
             answer=full_text or "Generation was interrupted before completion.",

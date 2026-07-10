@@ -102,6 +102,16 @@ class NodeRepository:
             raise DocumentNotFoundError(node_id)
         return self._node_from_row(row)
 
+    def get_many(self, node_ids: list[str]) -> list[DocumentNode]:
+        """Return existing nodes in the same order as *node_ids*."""
+        nodes: list[DocumentNode] = []
+        for node_id in node_ids:
+            try:
+                nodes.append(self.get_node_by_id(node_id))
+            except DocumentNotFoundError:
+                continue
+        return nodes
+
     def list_nodes_for_document(self, document_id: str) -> list[DocumentNode]:
         """Return all nodes for *document_id*, ordered by depth then position."""
         with self._connect() as conn:

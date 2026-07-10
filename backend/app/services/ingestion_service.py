@@ -155,17 +155,15 @@ class IngestionService:
             raise EmptyDocumentError(f"'{document.filename}' produced no document nodes.")
 
         self._replace_persisted_nodes(document.document_id, nodes)
-        self._store.replace_chunks(
-            document.document_id,
-            self._chunker.chunk_pages(document, self._nodes_to_page_texts(nodes)),
-        )
+        chunks = self._chunker.chunk_pages(document, self._nodes_to_page_texts(nodes))
+        self._store.replace_chunks(document.document_id, chunks)
 
         self._advance(job_id, "indexing_fts", "Indexing full text", 6, progress)
         self._index.add_document_nodes(nodes)
 
         self._advance(job_id, "indexing_headings", "Indexing headings", 7, progress)
         if build_okf and self._okf_gen is not None:
-            self._okf_gen.generate_for_document(nodes)
+            self._okf_gen.generate_for_document(chunks)
         if self._tree_idx is not None:
             tree = self._tree_idx.build(
                 document.document_id,

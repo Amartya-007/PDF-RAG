@@ -1,81 +1,57 @@
 # Architecture
 
-The system keeps two searchable layers:
-
-1. `source_chunks`: authoritative chunks extracted from uploaded PDFs or text files.
-2. `okf_concepts`: generated Markdown concept files with links back to source chunks.
-
-Final answers must cite source chunks, not OKF files. OKF improves routing and broad concept retrieval, but the PDF-derived evidence remains the truth layer.
-
-The main product shell is a PySide6 desktop app. It calls the Python service directly in-process, so normal use does not require a hosted web server or internet connection.
+The application is now a vectorless PDF RAG backend. Source documents are
+parsed into hierarchical `DocumentNode` records, persisted in SQLite, and
+indexed through lexical structures.
 
 ```text
-PDFs
+PDF / text / Markdown
   |
-Docling or PyMuPDF parsing
+LayoutParser
   |
-Cleaning and hierarchical chunking
+HeadingDetector
   |
-SQLite metadata + local vector index + BM25
+StructureBuilder
   |
-Hybrid dense/sparse retrieval
-  +
-OKF concept retrieval and source expansion
+SQLite nodes + chunks
   |
-RRF fusion
+FTS5 + heading index + phrase index + BM25
   |
-Reranking
+RetrievalService
   |
-Evidence block
+AnswerService
   |
-Ollama generation or extractive fallback
+Extractive answer or Ollama synthesis
   |
-Citation validation
+Citations
 ```
 
-## Desktop Shell
+## Storage
 
-The desktop app adds a thin UI/controller layer over `RagService`:
+- `documents` stores source-file metadata.
+- `nodes` stores the hierarchical source tree used by retrieval.
+- `chunks` remain only for OKF compatibility.
+- `answers` and `answer_citations` can persist chat results.
 
-- document import and library view
-- chat question entry and answer display
-- citation/source excerpt panel
-- settings dialog with data directory, Ollama URL, active model, embedding model, and readiness checks
-- PySide6 worker threads for ingestion and answering so the UI remains responsive
+## Indexes
 
-The first Windows build uses PyInstaller and does not bundle Ollama model weights. Users install Ollama and pull models once, then run offline.
+`IndexManager` owns the vectorless indexes:
 
-## Production Upgrade Path
+- `FTS5Index` for full-text node search.
+- `HeadingIndex` for section-title lookup.
+- `PhraseIndex` for exact phrase lookup.
+- `MetadataIndex` for document-to-node bookkeeping.
+- `BM25Index` for legacy OKF compatibility.
 
-- Replace `LocalVectorStore` with Qdrant dense and sparse collections.
-- Replace heuristic `Reranker` with `Qwen/Qwen3-Reranker-0.6B`.
-- Use Docling OCR/table modes for PDF parsing.
-- Add persistent background jobs for long PDF ingestion.
-- Add evaluation datasets under `evaluation/datasets`.
-- Replace the initial desktop source excerpt panel with page-level PDF preview/highlighting.
-- Add richer desktop retrieval inspector and evaluation dashboards after the core app is stable.
+## Services
 
-## OKF Bundle Layout
+- `IngestionService` parses, structures, persists, and indexes documents.
+- `RetrievalService` combines lexical hits with tree navigation and ranking.
+- `AnswerService` chooses extractive answers or optional Ollama synthesis.
+- `backend.app.rag_service.RagService` is a compatibility import for the new
+  service coordinator.
 
-Generated OKF files use this shape:
+## OKF
 
-```text
-knowledge/
-  index.md
-  concepts/
-    index.md
-    revenue.md
-    payments.md
-```
-
-Concept files contain YAML frontmatter with `type: concept`, identity fields, relationship fields, and source chunk bindings. The Markdown body includes human-readable links between related concepts plus excerpts and original source references. Imported OKF bundles are validated before they are copied into this layout.
-
-## Three-Path Retrieval
-
-Questions now retrieve through:
-
-1. OKF concept dense/sparse search, then expansion to bound source chunks.
-2. Raw PDF/source dense retrieval.
-3. Raw PDF/source BM25 retrieval.
-
-All source chunk candidates are fused with Reciprocal Rank Fusion, reranked, and then passed to answer generation. The OKF layer helps routing, but final answers still cite original source chunks.
+Generated OKF files remain Markdown concepts linked back to source chunks.
+They can help organize knowledge, but final answers must cite source evidence.

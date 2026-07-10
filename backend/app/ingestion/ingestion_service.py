@@ -31,10 +31,11 @@ from pathlib import Path
 from backend.app.core.hashing import sha256_file
 from backend.app.database.repositories.job_repository import JobRepository
 from backend.app.database.repositories.node_repository import NodeRepository
-from backend.app.database.store import MetadataStore
+from backend.app.database.store import DEFAULT_SESSION_ID, MetadataStore
 from backend.app.domain.models.job import IngestionJob
 from backend.app.domain.models.node import DocumentNode
 from backend.app.indexing.index_manager import IndexManager
+from backend.app.ingestion.chunking import Chunker
 from backend.app.ingestion.layout_parser import LayoutParser
 from backend.app.ingestion.structure_builder import StructureBuilder
 from backend.app.models import Document
@@ -64,6 +65,7 @@ class IngestionService:
         index_mgr: IndexManager,
         layout: LayoutParser,
         builder: StructureBuilder,
+        chunker: Chunker | None = None,
         okf_gen=None,
         tree_idx=None,
     ) -> None:
@@ -73,6 +75,7 @@ class IngestionService:
         self._index    = index_mgr
         self._layout   = layout
         self._builder  = builder
+        self._chunker  = chunker or Chunker()
         self._okf_gen  = okf_gen
         self._tree_idx = tree_idx
 
@@ -105,10 +108,11 @@ class IngestionService:
 
         filename = path.name
         file_hash = sha256_file(path)
+        active_session = session_id or DEFAULT_SESSION_ID
 
         # Idempotency check
-        existing = self._store.get_document_by_hash(file_hash)
-        if existing and not force:
+        existing = self._store.get_document_by_hash(file_hash, active_session)
+        if existing and existing.status == "ready" and not force:
             logger.info("IngestionService: skipping duplicate %s (hash=%s)", filename, file_hash[:8])
             return existing
 
@@ -117,7 +121,7 @@ class IngestionService:
             filename=filename,
             path=str(path),
             file_hash=file_hash,
-            session_id=session_id,
+            session_id=active_session,
             status="processing",
         )
 
@@ -125,7 +129,7 @@ class IngestionService:
         job = IngestionJob(
             job_id=str(uuid.uuid4()),
             document_id=document.document_id,
-            session_id=session_id or "",
+            session_id=active_session,
             status="processing",
             progress_message="Starting ingestion",
         )
@@ -173,6 +177,8 @@ class IngestionService:
             self._index.remove_document(document.document_id, stale_ids)
             self._node_repo.delete_for_document(document.document_id)
         self._node_repo.upsert_many(nodes)
+        chunks = self._chunker.chunk_pages(document, self._nodes_to_page_texts(nodes))
+        self._store.replace_chunks(document.document_id, chunks)
 
         # Stage 4: Index nodes
         self._job_repo.update_status(job.job_id, "processing", "Updating search indexes")
@@ -182,7 +188,7 @@ class IngestionService:
         if build_okf and self._okf_gen is not None:
             self._job_repo.update_status(job.job_id, "processing", "Generating concepts")
             try:
-                self._okf_gen.generate_for_document(nodes)
+                self._okf_gen.generate_for_document(chunks)
             except Exception as exc:
                 logger.warning("OKF generation failed (non-fatal): %s", exc)
 
