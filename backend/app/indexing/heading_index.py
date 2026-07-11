@@ -49,11 +49,40 @@ class HeadingIndex:
         self._node_to_heading: dict[str, str] = {}
         self._heading_to_nodes: dict[str, list[str]] = defaultdict(list)
 
-    def add(self, node_id: str, heading: str) -> None:
-        """Add a heading mapping to the index."""
+    def index(self, node_id: str, heading: str) -> None:
+        """Add or replace a heading mapping for a node.
+
+        Attributes:
+            node_id: Identifier of the node being indexed.
+            heading: The node's heading/title text.
+        """
+        self.remove(node_id)
         normalised = _normalise(heading)
         self._node_to_heading[node_id] = heading
         self._heading_to_nodes[normalised].append(node_id)
+
+    def remove(self, node_id: str) -> None:
+        """Remove a node from the index, if present.
+
+        Attributes:
+            node_id: Identifier of the node to remove.
+        """
+        heading = self._node_to_heading.pop(node_id, None)
+        if heading is None:
+            return
+        normalised = _normalise(heading)
+        bucket = self._heading_to_nodes.get(normalised)
+        if bucket:
+            self._heading_to_nodes[normalised] = [nid for nid in bucket if nid != node_id]
+            if not self._heading_to_nodes[normalised]:
+                del self._heading_to_nodes[normalised]
+
+    def rebuild(self, items: list[tuple[str, str]]) -> None:
+        """Wipe and rebuild the index from (node_id, heading) pairs."""
+        self._node_to_heading.clear()
+        self._heading_to_nodes.clear()
+        for node_id, heading in items:
+            self.index(node_id, heading)
 
     def search(self, heading_text: str) -> list[str]:
         """Search for nodes matching a heading, ranked by similarity.

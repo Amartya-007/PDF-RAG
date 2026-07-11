@@ -63,6 +63,13 @@ class MetadataIndex:
             self._node_to_document.pop(node_id, None)
         return list(node_ids)
 
+    def rebuild(self, nodes: list[DocumentNode]) -> None:
+        """Wipe and rebuild the index from a full list of nodes."""
+        self._document_to_nodes.clear()
+        self._node_to_document.clear()
+        for node in nodes:
+            self.index(node)
+
     def node_ids_for_document(self, document_id: str) -> list[str]:
         """Get all node identifiers belonging to a document.
 

@@ -17,6 +17,22 @@ logger = logging.getLogger(__name__)
 # Pre-compiled regex for performance
 _SANITIZE_RE = re.compile(r"[^\w\s\-]")
 
+# Small stopword set for natural-language questions. FTS5's bare MATCH syntax
+# ANDs every bareword term together, so passing a whole question through
+# verbatim (e.g. "how many earned leave days can employees carry forward?")
+# would require ALL of those words -- including "how"/"many"/"can" -- to be
+# present in a node's text, which is almost never true. Stripping stopwords
+# and OR-combining what's left lets BM25 ranking reward more matching terms
+# instead of requiring all of them.
+_STOPWORDS = frozenset({
+    "a", "an", "and", "are", "as", "at", "be", "by", "can", "could", "did",
+    "do", "does", "for", "from", "had", "has", "have", "how", "i", "if",
+    "in", "into", "is", "it", "its", "of", "on", "or", "our", "that", "the",
+    "their", "there", "these", "this", "those", "to", "was", "were", "what",
+    "when", "where", "which", "who", "whom", "why", "will", "with", "you",
+    "your", "many", "much", "tell", "me", "about", "please",
+})
+
 
 class FTS5Index:
     """Full-text search index backed by SQLite FTS5.
@@ -69,14 +85,34 @@ class FTS5Index:
             self._consistent = False
             logger.warning("FTS5 delete failed: %s", exc)
 
+    def is_consistent(self) -> bool:
+        """Whether the index is currently believed to be in sync with SQLite."""
+        return self._consistent
+
     def rebuild(self, nodes: list[DocumentNode]) -> None:
-        """Wipe and rebuild the index using batch operations."""
+        """Wipe and rebuild the index using batch operations.
+
+        Only rowids we've actually tracked as indexed are cleared first. A
+        bare ``DELETE FROM nodes_fts`` assumes every row in the external
+        content table (``nodes``) is currently indexed; when that's not
+        true (e.g. a node exists in ``nodes`` but was never added to this
+        index), FTS5 raises a spurious "database disk image is malformed"
+        error while reconciling its shadow tables against a content row it
+        never indexed.
+        """
         try:
             with self._connect() as conn:
-                # Optimized: Clear all indexed rows first
-                conn.execute("DELETE FROM nodes_fts")
+                for rowid in list(self._indexed_rowids):
+                    row = conn.execute(
+                        "SELECT node_id, text, title FROM nodes WHERE rowid = ?",
+                        (rowid,),
+                    ).fetchone()
+                    if row is not None:
+                        self._delete_fts_row(
+                            conn, rowid, row["node_id"], row["text"], row["title"] or ""
+                        )
                 self._indexed_rowids.clear()
-                
+
                 # Optimized: Use executemany to push iteration to C-layer
                 data = [(self._node_rowid(conn, n.id), n.id, n.text, n.title or "") for n in nodes]
                 conn.executemany(
@@ -149,4 +185,16 @@ class FTS5Index:
     def _sanitise_fts5_query(query: str) -> str:
         # Pre-compiled regex used here for performance
         sanitised = query.replace('"', ' ').replace("'", " ").strip()
-        return _SANITIZE_RE.sub(" ", sanitised).strip() or '""'
+        cleaned = _SANITIZE_RE.sub(" ", sanitised).strip()
+        if not cleaned:
+            return '""'
+
+        all_terms = cleaned.split()
+        significant = [t for t in all_terms if t.lower() not in _STOPWORDS]
+        terms = significant or all_terms
+        if not terms:
+            return '""'
+
+        # OR-combine so a node matching *some* terms still surfaces; BM25
+        # ranking (via `rank`) naturally favors nodes matching more terms.
+        return " OR ".join(f'"{t}"' for t in terms)

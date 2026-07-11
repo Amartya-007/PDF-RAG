@@ -37,8 +37,18 @@ class BM25Index:
     def __init__(self, path: Path) -> None:
         self.path = path
         self._texts: dict[str, str] = {}
+        self._ids: list[str] = []
+        self._retriever: "bm25s.BM25 | None" = None
         self._lock = threading.RLock()
         self._load()
+
+    def build(self, chunks: Sequence) -> None:
+        """Build (or rebuild) the index from a sequence of Chunk objects.
+
+        Attributes:
+            chunks: Objects exposing ``chunk_id`` and ``text`` attributes.
+        """
+        self.rebuild([(chunk.chunk_id, chunk.text) for chunk in chunks])
 
     def add(self, chunk_id: str, text: str) -> None:
         """Add or update a chunk in the index."""
@@ -71,17 +81,27 @@ class BM25Index:
             if not self._texts:
                 return []
             
-            if _HAS_BM25S:
+            if _HAS_BM25S and self._retriever is not None:
                 return self._search_bm25s(query, top_k)
             return self._search_fallback(query, top_k)
 
     def _fit(self) -> None:
-        """Prepare the index (internal use only)."""
-        # Logic to trigger indexing for bm25s would go here if keeping state
-        pass
+        """(Re)build the in-memory bm25s retriever over the current corpus."""
+        self._ids = list(self._texts.keys())
+        if not _HAS_BM25S or not self._ids:
+            self._retriever = None
+            return
+        try:
+            corpus_tokens = bm25s.tokenize(list(self._texts.values()), show_progress=False)
+            retriever = bm25s.BM25()
+            retriever.index(corpus_tokens, show_progress=False)
+            self._retriever = retriever
+        except Exception as exc:
+            logger.warning("bm25s indexing failed, falling back to pure-Python: %s", exc)
+            self._retriever = None
 
     def _save(self) -> None:
-        """Persist index state to disk."""
+        """Persist index state to disk.""" 
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(
             json.dumps(self._texts, separators=(",", ":")),
@@ -98,10 +118,22 @@ class BM25Index:
                 logger.error("Failed to load BM25 index: %s", exc)
 
     def _search_bm25s(self, query: str, top_k: int) -> list[tuple[str, float]]:
-        """Optimized search using the bm25s library."""
-        # Implementation depends on bm25s.BM25 object lifecycle.
-        # Ensure your bm25s object is initialized here if needed.
-        return []
+        """Search using the bm25s library."""
+        k = min(top_k, len(self._ids))
+        if k <= 0:
+            return []
+        try:
+            query_tokens = bm25s.tokenize([query], show_progress=False)
+            results, scores = self._retriever.retrieve(query_tokens, k=k, show_progress=False)
+        except Exception as exc:
+            logger.warning("bm25s search failed, falling back to pure-Python: %s", exc)
+            return self._search_fallback(query, top_k)
+
+        pairs: list[tuple[str, float]] = []
+        for idx, score in zip(results[0], scores[0]):
+            if 0 <= idx < len(self._ids) and score > 0:
+                pairs.append((self._ids[idx], float(score)))
+        return pairs
 
     def _search_fallback(self, query: str, top_k: int) -> list[tuple[str, float]]:
         """Pure-Python fallback search."""

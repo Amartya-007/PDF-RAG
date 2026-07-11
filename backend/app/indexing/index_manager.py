@@ -28,23 +28,29 @@ logger = logging.getLogger(__name__)
 
 
 class IndexManager:
-    """Coordinates atomic multi-index operations for node data."""
+    """Coordinates atomic multi-index operations for node data.
+
+    Sub-indexes are exposed as public attributes (``fts5``, ``heading``,
+    ``phrase``, ``bm25``, ``metadata``) so callers (and tests) can query a
+    specific index directly without the manager having to proxy every
+    method.
+    """
 
     def __init__(
         self,
-        node_repo: NodeRepository,
         fts5: FTS5Index,
         heading: HeadingIndex,
         phrase: PhraseIndex,
-        metadata: MetadataIndex,
         bm25: BM25Index,
+        metadata: MetadataIndex,
+        node_repo: NodeRepository,
     ) -> None:
+        self.fts5 = fts5
+        self.heading = heading
+        self.phrase = phrase
+        self.bm25 = bm25
+        self.metadata = metadata
         self._node_repo = node_repo
-        self._fts5 = fts5
-        self._heading = heading
-        self._phrase = phrase
-        self._metadata = metadata
-        self._bm25 = bm25
 
     def add_document_nodes(self, nodes: list[DocumentNode]) -> None:
         """Add nodes to all indexes atomically; rollback on failure.
@@ -55,16 +61,29 @@ class IndexManager:
         added_ids: list[str] = []
         try:
             for node in nodes:
-                self._fts5.upsert(node)
-                self._heading.add(node.id, node.title or "")
-                self._phrase.add(node.id, node.text)
-                self._bm25.add(node.id, node.text)
-                self._metadata.add(node)
+                self.fts5.upsert(node)
+                self.heading.index(node.id, node.title or "")
+                self.phrase.index(node.id, node.title, node.text)
+                self.bm25.add(node.id, node.text)
+                self.metadata.index(node)
                 added_ids.append(node.id)
         except Exception as exc:
             logger.error("Indexing failed, rolling back %d nodes: %s", len(added_ids), exc)
             self._rollback_nodes(added_ids)
             raise exc
+
+    def remove_document(self, document_id: str) -> None:
+        """Remove every indexed node belonging to a document, across all indexes.
+
+        Attributes:
+            document_id: The document whose nodes should be de-indexed.
+        """
+        node_ids = self.metadata.remove_document(document_id)
+        for node_id in node_ids:
+            self.fts5.delete(node_id)
+            self.heading.remove(node_id)
+            self.phrase.remove(node_id)
+            self.bm25.remove(node_id)
 
     def rebuild_all(self, session_id: str | None = None) -> None:
         """Wipe and rebuild all indexes from the node store.
@@ -81,23 +100,23 @@ class IndexManager:
 
         # Batch rebuilds are highly efficient because they leverage 
         # the underlying index classes' bulk operations.
-        self._fts5.rebuild(nodes)
-        self._heading.rebuild([(n.id, n.title) for n in nodes if n.title])
-        self._phrase.rebuild([(n.id, n.title, n.text) for n in nodes])
-        self._metadata.rebuild(nodes)
-        self._bm25.rebuild(nodes)
-        
+        self.fts5.rebuild(nodes)
+        self.heading.rebuild([(n.id, n.title) for n in nodes if n.title])
+        self.phrase.rebuild([(n.id, n.title, n.text) for n in nodes])
+        self.bm25.rebuild([(n.id, n.text) for n in nodes])
+        self.metadata.rebuild(nodes)
+
         logger.info("IndexManager: rebuild complete")
 
     def _rollback_nodes(self, node_ids: list[str]) -> None:
         """Remove a list of nodes from all indexes."""
         for node_id in node_ids:
             try:
-                self._fts5.delete(node_id)
-                self._heading.remove(node_id)
-                self._phrase.remove(node_id)
-                self._bm25.remove(node_id)
-                self._metadata.remove(node_id)
+                self.fts5.delete(node_id)
+                self.heading.remove(node_id)
+                self.phrase.remove(node_id)
+                self.bm25.remove(node_id)
+                self.metadata.remove(node_id)
             except Exception as exc:
                 # Log rollback failures but don't stop the rollback process
                 logger.error("Rollback failed for node %s: %s", node_id, exc)
