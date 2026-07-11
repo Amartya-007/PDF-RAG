@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from functools import lru_cache
-from pydantic import Field, HttpUrl, DirectoryPath
+from pydantic import Field, HttpUrl
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
@@ -12,7 +12,12 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="RAG_", env_file=".env", extra="ignore")
 
     # Paths
-    data_dir: DirectoryPath = Field(default=Path("backend/data"))
+    # NOTE: intentionally a plain Path, not DirectoryPath. DirectoryPath requires the
+    # directory to exist at validation time, but this directory is created BY
+    # ensure_data_dirs(settings) below -- which needs a constructed Settings first.
+    # Using DirectoryPath here made Settings() raise a ValidationError on any fresh
+    # checkout (backend/data doesn't exist yet), breaking get_settings() everywhere.
+    data_dir: Path = Field(default=Path("backend/data"))
     
     # SQLite
     sqlite_path_value: str = Field(default="metadata.sqlite3", alias="RAG_SQLITE_PATH")
@@ -57,8 +62,10 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
-    """Returns a cached settings object."""
-    return Settings()
+    """Returns a cached settings object with its data directories already created."""
+    settings = Settings()
+    ensure_data_dirs(settings)
+    return settings
 
 def ensure_data_dirs(settings: Settings) -> None:
     """Ensures that required data directories exist."""
