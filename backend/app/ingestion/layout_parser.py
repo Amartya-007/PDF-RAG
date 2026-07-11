@@ -15,14 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-# Optional PDF support
-try:
-    import fitz  # PyMuPDF
-    _HAS_PDF = True
-except ImportError:
-    _HAS_PDF = False
-
-from backend.app.ingestion.parser.pdf_parser import PageText
+from backend.app.ingestion.parser.pdf_parser import PageText, PdfParser
 
 # Pre-compiled regex for performance
 _PARA_SPLIT_RE = re.compile(r"\n{2,}")
@@ -61,31 +54,107 @@ class LayoutParser:
         Attributes:
             path: Path to the document (PDF, TXT, or MD).
         """
-        if path.suffix.lower() == ".pdf" and _HAS_PDF:
+        if path.suffix.lower() == ".pdf":
             return self._parse_pdf(path)
         return self._parse_plain(path)
 
     def _parse_pdf(self, path: Path) -> list[LayoutNode]:
-        """Extract nodes using PyMuPDF (fitz) for rich layout metadata."""
+        """Extract nodes using PyMuPDF for rich layout metadata.
+
+        The import is deliberately local (not module-level) so the PDF
+        backend can be swapped or mocked per-call, and so a missing/broken
+        PyMuPDF install degrades to the Docling-based ``PdfParser`` instead
+        of crashing ingestion.
+        """
+        try:
+            import pymupdf
+        except ImportError:
+            return self._parse_with_docling_fallback(path)
+
         nodes: list[LayoutNode] = []
-        with fitz.open(path) as doc:
-            for page in doc:
-                blocks = page.get_text("dict")["blocks"]
-                for b in blocks:
-                    if b.get("type") == 0:  # Text block
-                        text = "".join(l["text"] for l in b["lines"])
-                        # Extract first line metadata for heading detection
-                        line0 = b["lines"][0]["spans"][0]
+        try:
+            with pymupdf.open(path) as doc:
+                for page_index in range(len(doc)):
+                    page = doc[page_index]
+                    blocks = page.get_text("dict").get("blocks", [])
+                    for block in blocks:
+                        if block.get("type") != 0 or not block.get("lines"):
+                            continue
+                        (
+                            text, font_size, font_name, is_bold, bbox, indent,
+                            line_spacing,
+                        ) = self._extract_block_info(block)
+                        if not text:
+                            continue
                         nodes.append(LayoutNode(
-                            text=text.strip(),
-                            page_number=page.number + 1,
-                            font_size=line0.get("size"),
-                            font_name=line0.get("font"),
-                            is_bold="bold" in line0.get("font", "").lower(),
-                            bbox=b["bbox"],
-                            indent=b["bbox"][0],
+                            text=text,
+                            page_number=page_index + 1,
+                            font_size=font_size,
+                            font_name=font_name,
+                            is_bold=is_bold,
+                            bbox=bbox,
+                            indent=indent,
+                            line_spacing=line_spacing,
                         ))
+        except Exception:
+            return self._parse_with_docling_fallback(path)
+
+        if not nodes:
+            return self._parse_with_docling_fallback(path)
         return nodes
+
+    @staticmethod
+    def _parse_with_docling_fallback(path: Path) -> list[LayoutNode]:
+        """Fall back to the Docling-backed ``PdfParser`` (e.g. scanned PDFs)."""
+        return [
+            LayoutNode(text=page_text.text, page_number=page_text.page_number)
+            for page_text in PdfParser().parse(path)
+            if page_text.text.strip()
+        ]
+
+    @staticmethod
+    def _extract_block_info(
+        block: dict[str, Any],
+    ) -> tuple[str, float | None, str | None, bool, tuple[float, float, float, float] | None, float, float]:
+        """Extract text and visual metadata from a PyMuPDF ``dict``-mode block.
+
+        Returns a tuple of (text, font_size, font_name, is_bold, bbox, indent,
+        line_spacing). ``font_size`` is the largest span size in the block
+        (the dominant/heading-relevant size); ``line_spacing`` is the vertical
+        gap between the first two line baselines, or 0.0 for single-line
+        blocks.
+        """
+        lines = block.get("lines", [])
+        line_texts: list[str] = []
+        sizes: list[float] = []
+        names: list[str] = []
+        is_bold = False
+
+        for line in lines:
+            spans = line.get("spans", [])
+            line_texts.append("".join(span.get("text", "") for span in spans))
+            for span in spans:
+                if span.get("size") is not None:
+                    sizes.append(span["size"])
+                font_name = span.get("font") or ""
+                if font_name:
+                    names.append(font_name)
+                if (span.get("flags", 0) & 16) or "bold" in font_name.lower():
+                    is_bold = True
+
+        text = "".join(line_texts).strip()
+        font_size = max(sizes) if sizes else None
+        font_name = names[0] if names else None
+        bbox = tuple(block["bbox"]) if block.get("bbox") else None
+        indent = bbox[0] if bbox else 0.0
+
+        line_spacing = 0.0
+        if len(lines) >= 2:
+            first_y = lines[0].get("bbox", (0.0, 0.0, 0.0, 0.0))[1]
+            second_y = lines[1].get("bbox", (0.0, 0.0, 0.0, 0.0))[1]
+            line_spacing = second_y - first_y
+
+        return text, font_size, font_name, is_bold, bbox, indent, line_spacing
 
     def _parse_plain(self, path: Path) -> list[LayoutNode]:
         """Fallback for plain text / Markdown documents."""

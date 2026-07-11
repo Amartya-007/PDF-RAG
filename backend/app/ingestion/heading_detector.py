@@ -59,13 +59,39 @@ class HeadingResult:
 
 
 class HeadingDetector:
-    """Classifies LayoutNodes as headings or body text."""
+    """Classifies LayoutNodes as headings or body text.
 
-    def __init__(self, threshold: float = _THRESHOLD) -> None:
+    Accepts an optional pre-known body font size baseline (useful when the
+    caller already knows the document's dominant font size); otherwise the
+    baseline is estimated from whichever batch of nodes is passed to
+    ``detect()``.
+    """
+
+    def __init__(
+        self,
+        body_font_size_baseline: float | None = None,
+        threshold: float = _THRESHOLD,
+    ) -> None:
         self._HEADING_THRESHOLD = threshold
+        self._provided_baseline = body_font_size_baseline
 
-    def detect(self, node: LayoutNode, baseline_size: float) -> HeadingResult:
-        """Score a node and classify it as a heading or body text.
+    def detect(self, nodes: list[LayoutNode]) -> list[HeadingResult]:
+        """Classify a batch of layout nodes as headings or body text.
+
+        Attributes:
+            nodes: The layout nodes to inspect, in document order. The body
+                   font-size baseline is estimated from this batch unless one
+                   was supplied to the constructor.
+        """
+        baseline = (
+            self._provided_baseline
+            if self._provided_baseline is not None
+            else self.estimate_baseline(nodes)
+        )
+        return [self._classify(node, baseline) for node in nodes]
+
+    def _classify(self, node: LayoutNode, baseline_size: float) -> HeadingResult:
+        """Score a single node and classify it as a heading or body text.
 
         Attributes:
             node:          The layout node to inspect.
