@@ -26,7 +26,7 @@ class JobRepository:
     def __init__(self, connection_factory: Callable[[], sqlite3.Connection]) -> None:
         self._connect = connection_factory
 
-    def create(self, job: IngestionJob) -> IngestionJob:
+    def create_job(self, job: IngestionJob) -> IngestionJob:
         """Insert a new job row. Sets created_at / updated_at if empty.
 
         Attributes:
@@ -56,7 +56,7 @@ class JobRepository:
             )
         return job
 
-    def get(self, job_id: str) -> IngestionJob:
+    def get_job(self, job_id: str) -> IngestionJob:
         """Fetch a job by ID. Raises DocumentNotFoundError when absent."""
         with self._connect() as conn:
             row = conn.execute(
@@ -67,7 +67,7 @@ class JobRepository:
             raise DocumentNotFoundError(job_id)
         return self._from_row(row)
 
-    def update_status(self, job_id: str, status: str, message: str = "") -> None:
+    def update_job_status(self, job_id: str, status: str, message: str = "") -> None:
         """Transition job to *status* with an optional progress message."""
         with self._connect() as conn:
             conn.execute(
@@ -79,7 +79,7 @@ class JobRepository:
                 (status, message[:MAX_MESSAGE_LENGTH], _now(), job_id),
             )
 
-    def list_for_document(self, document_id: str) -> list[IngestionJob]:
+    def list_jobs_for_document(self, document_id: str) -> list[IngestionJob]:
         """List all jobs associated with a specific document, newest first."""
         with self._connect() as conn:
             rows = conn.execute(
@@ -92,9 +92,9 @@ class JobRepository:
             ).fetchall()
         return [self._from_row(r) for r in rows]
 
-    def latest_for_document(self, document_id: str) -> IngestionJob | None:
+    def latest_job_for_document(self, document_id: str) -> IngestionJob | None:
         """Get the most recent job for a document, or None if none exist."""
-        jobs = self.list_for_document(document_id)
+        jobs = self.list_jobs_for_document(document_id)
         return jobs[0] if jobs else None
 
     @staticmethod

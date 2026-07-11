@@ -8,7 +8,12 @@ class QueryClassifier:
     # Map patterns to their target Enums
     # The order here defines your priority (First Match Wins)
     _ROUTING_TABLE = {
-        re.compile(r"\b(name|email|phone|contact|address|date|location)\b", re.I): QueryType.FAST_FACT,
+        re.compile(
+            r"\b(name|email|phone|contact|address|date|location|"
+            r"college|university|institute|school|academy|campus|"
+            r"department|dept|cgpa|gpa|percentage)\b",
+            re.I,
+        ): QueryType.FAST_FACT,
         re.compile(r"\b(what is|what are|define|explain|describe|details? about)\b", re.I): QueryType.TOPIC,
         re.compile(r"\b(compare|versus|vs\.?)\b", re.I): QueryType.COMPARISON,
         re.compile(r"\b(summarize|summary|overview)\b", re.I): QueryType.SUMMARY,

@@ -27,10 +27,11 @@ from backend.app.generation.ollama_client import OllamaClient
 from backend.app.indexing.full_text_index import FTS5Index
 from backend.app.indexing.heading_index import HeadingIndex
 from backend.app.indexing.index_manager import IndexManager
+from backend.app.indexing.metadata_index import MetadataIndex
 from backend.app.indexing.phrase_index import PhraseIndex
 from backend.app.indexing.sparse import BM25Index
 from backend.app.ingestion.heading_detector import HeadingDetector
-from backend.app.ingestion.ingestion_service import IngestionService
+from backend.app.services.ingestion_service import IngestionService
 from backend.app.ingestion.layout_parser import LayoutParser
 from backend.app.ingestion.structure_builder import StructureBuilder
 from backend.app.knowledge.okf import OkfConcept, validate_okf_bundle
@@ -75,10 +76,12 @@ class RagServiceV2:
             self._fts5, 
             HeadingIndex(), 
             PhraseIndex(), 
-            BM25Index(self.settings.indexes_dir / "bm25.json")
+            BM25Index(self.settings.indexes_dir / "bm25.json"),
+            MetadataIndex(),
+            self._node_repo,
         )
         try:
-            self._idx_mgr.rebuild_all(self._node_repo)
+            self._idx_mgr.rebuild_all()
         except Exception as exc:
             logger.warning("Startup index rebuild skipped: %s", exc)
 
@@ -142,8 +145,8 @@ class RagServiceV2:
             )
             
         answer = self.answer_service.answer(question, result.nodes)
-        answer.citations = [self._enrich_citation(c) for c in answer.citations]
-        return replace(answer, debug=debug)
+        enriched_citations = [self._enrich_citation(c) for c in answer.citations]
+        return replace(answer, citations=enriched_citations, debug=debug)
 
     def retrieve(
         self,
@@ -196,9 +199,7 @@ class RagServiceV2:
         return self.store.ensure_session(session_id, "Chat")
 
     def delete_document(self, document_id: str) -> list[str]:
-        node_ids = [n.id for n in self._node_repo.list_nodes_for_document(document_id)]
-        if node_ids:
-            self._idx_mgr.remove_document(document_id, node_ids)
+        self._idx_mgr.remove_document(document_id)
         return self.store.delete_document(document_id)
 
     def delete_session_documents(self, session_id: str | None = None) -> None:

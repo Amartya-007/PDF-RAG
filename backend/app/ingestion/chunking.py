@@ -114,5 +114,4 @@ class Chunker:
             section_path=section_path,
             text=text,
             chunk_type="paragraph",
-            word_count=len(tokenize(text)),
         )

@@ -109,6 +109,91 @@ class NodeRanker:
         ranked = self.rank(query, candidates, tree_selected_ids, top_k)
         return [r.node for r in ranked]
 
+    def rank_fast_fact(
+        self,
+        query: str,
+        candidates: list[DocumentNode],
+        candidate_ids: set[str] | None = None,
+    ) -> list[DocumentNode]:
+        """Rank candidates for a fast-fact query (short, specific-entity answer).
+
+        Weighs retrieval-hit membership and token overlap most heavily, since
+        fast-fact answers usually live in the node that was actually
+        retrieved rather than the one with the most on-topic heading.
+
+        Attributes:
+            query:         The user's question.
+            candidates:    Candidate nodes to rank.
+            candidate_ids: Node IDs that came back from the retrieval step
+                           (e.g. lexical search hits); ranked higher.
+        """
+        return self._rank_by_query_type(query, candidates, candidate_ids, primary="fast_fact")
+
+    def rank_topic(
+        self,
+        query: str,
+        candidates: list[DocumentNode],
+        candidate_ids: set[str] | None = None,
+    ) -> list[DocumentNode]:
+        """Rank candidates for a topic/overview query (broad, heading-led answer).
+
+        Weighs heading-text match most heavily, since topic questions ("tell
+        me about X") are best answered starting from the section whose
+        title matches X, even if the retrieval hit set is noisy.
+
+        Attributes:
+            query:         The user's question.
+            candidates:    Candidate nodes to rank.
+            candidate_ids: Node IDs that came back from the retrieval step;
+                           ranked higher.
+        """
+        return self._rank_by_query_type(query, candidates, candidate_ids, primary="topic")
+
+    def _rank_by_query_type(
+        self,
+        query: str,
+        candidates: list[DocumentNode],
+        candidate_ids: set[str] | None,
+        primary: str,
+    ) -> list[DocumentNode]:
+        if not candidates:
+            return []
+
+        candidate_ids = candidate_ids or set()
+        query_tokens = _token_set(query)
+
+        scored: list[tuple[DocumentNode, float, dict[str, float]]] = []
+        for node in candidates:
+            node_text = node.text or ""
+            overlap = _jaccard(query_tokens, _token_set(node_text))
+            heading = self._heading_match(query, node.title)
+            retrieval_hit = 1.0 if node.id in candidate_ids else 0.0
+            page = self._page_score(node.page_start)
+            density = self._density_score(node_text)
+
+            fast_fact_score = round(
+                0.55 * retrieval_hit + 0.30 * overlap + 0.10 * heading + 0.05 * density, 4
+            )
+            topic_score = round(
+                0.45 * heading + 0.30 * overlap + 0.15 * retrieval_hit + 0.10 * page, 4
+            )
+            primary_score = fast_fact_score if primary == "fast_fact" else topic_score
+
+            scored.append((node, primary_score, {
+                "score": primary_score,
+                "fast_fact_score": fast_fact_score,
+                "topic_score": topic_score,
+                "overlap": overlap,
+                "heading_score": heading,
+                "retrieval_hit": retrieval_hit,
+                "page_score": page,
+                "density_score": density,
+            }))
+
+        scored.sort(key=lambda entry: entry[1], reverse=True)
+        self._last_details = {node.id: details for node, _, details in scored}
+        return [node for node, _, _ in scored]
+
     def score_details(self, node_id: str) -> dict[str, float]:
         """Returns scoring breakdowns for debugging retrieval logic."""
         return self._last_details.get(node_id, {})

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+import dataclasses
 from collections import defaultdict
 from collections.abc import Callable
 from pathlib import Path
@@ -151,8 +152,6 @@ class IngestionService:
             raise EmptyDocumentError(f"'{document.filename}' produced no text after cleaning.")
 
         self._advance(job_id, "detecting_structure", "Detecting structure", 4, progress)
-        self._detector.detect(layout_nodes)
-
         self._advance(job_id, "building_nodes", "Building nodes", 5, progress)
         nodes = self._builder.build(layout_nodes, document_id=document.document_id)
         if not nodes:
@@ -184,7 +183,7 @@ class IngestionService:
         """Removes existing nodes for a document and persists new ones."""
         stale_nodes = self._node_repo.list_nodes_for_document(document_id)
         if stale_nodes:
-            self._index.remove_document(document_id, [n.id for n in stale_nodes])
+            self._index.remove_document(document_id)
             self._node_repo.delete_nodes_for_document(document_id)
         self._node_repo.upsert_many(nodes)
 
@@ -192,7 +191,7 @@ class IngestionService:
     def _clean_layout_nodes(nodes: list[LayoutNode]) -> list[LayoutNode]:
         """Filters nodes and cleans whitespace from text content."""
         return [
-            node.replace(text=node.text.strip()) 
+            dataclasses.replace(node, text=node.text.strip())
             for node in nodes 
             if node.text and node.text.strip()
         ]
