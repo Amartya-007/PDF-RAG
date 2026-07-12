@@ -182,10 +182,20 @@ class MetadataStore:
     def connect(self) -> sqlite3.Connection:
         if self.path == ":memory:":
             if self._memory_connection is None:
-                self._memory_connection = sqlite3.connect(":memory:")
+                # check_same_thread=False: FastAPI dispatches each sync
+                # request handler to a worker thread (not necessarily the
+                # same one each time), but this single in-memory connection
+                # is cached and reused for the lifetime of the process.
+                # Without this, every request after the first one handled
+                # on a different thread raises "SQLite objects created in a
+                # thread can only be used in that same thread." We're not
+                # doing concurrent writes on this connection from multiple
+                # threads simultaneously (FastAPI's threadpool serializes
+                # each request's handler body), so this is safe here.
+                self._memory_connection = sqlite3.connect(":memory:", check_same_thread=False)
                 self._memory_connection.row_factory = sqlite3.Row
             return self._memory_connection
-        conn = sqlite3.connect(self.path)
+        conn = sqlite3.connect(self.path, check_same_thread=False)
         conn.row_factory = sqlite3.Row
         conn.execute("pragma journal_mode=OFF")
         conn.execute("pragma synchronous=NORMAL")

@@ -37,6 +37,14 @@ class Settings(BaseSettings):
     use_ollama: bool = Field(default=False)
     force_ocr: bool = Field(default=False)
     use_tree_search: bool = Field(default=True)
+    debug_mode: bool = Field(default=False)
+
+    # HTTP server / API
+    backend_host: str = Field(default="127.0.0.1")
+    backend_port: int = Field(default=8000, ge=1, le=65535)
+    frontend_origin: HttpUrl = Field(default="http://localhost:3000")
+    max_upload_size_mb: int = Field(default=100, gt=0)
+    allowed_file_extensions: list[str] = Field(default_factory=lambda: [".pdf", ".txt", ".md"])
 
     @property
     def documents_dir(self) -> Path:

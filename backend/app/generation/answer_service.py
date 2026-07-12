@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterator
+from dataclasses import replace
 from typing import Final
 
 from backend.app.domain.exceptions import AnswerGenerationError
@@ -85,6 +86,7 @@ class AnswerService:
                 answer=_INSUFFICIENT,
                 citations=[],
                 answerable=False,
+                strategy="INSUFFICIENT",
             )
 
         # 1. Fast-fact extractive path (skips LLM overhead for predictable factual answers)
@@ -92,12 +94,12 @@ class AnswerService:
             logger.debug("AnswerService: fast-fact path triggered for %r", question[:60])
             result = self._extractive.answer(question, nodes)
             if result.answerable:
-                return result
+                return replace(result, strategy="EXTRACTIVE")
 
         # 2. Ollama generative path
         if self._ollama is not None:
             try:
-                return self._ollama.answer(question, nodes)
+                return replace(self._ollama.answer(question, nodes), strategy="GENERATE")
             except (AnswerGenerationError, Exception) as exc:
                 # Capture complete traceback logs silently to monitor service reliability degration
                 logger.warning(
@@ -108,7 +110,8 @@ class AnswerService:
 
         # 3. Extractive fallback path (executed if LLM fails or is un-configured)
         logger.debug("AnswerService: Falling back to heuristic text-overlap extraction for %r", question[:60])
-        return self._extractive.answer(question, nodes)
+        result = self._extractive.answer(question, nodes)
+        return replace(result, strategy="EXTRACTIVE" if result.answerable else "INSUFFICIENT")
 
     # ── Streaming ──────────────────────────────────────────────────────────
 

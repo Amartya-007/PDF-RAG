@@ -46,6 +46,7 @@ def build_evidence_block(
                 page_end=chunk.page_end,
                 chunk_id=chunk.chunk_id,
                 excerpt=excerpt,
+                heading_path=list(chunk.section_path),
             )
         )
         

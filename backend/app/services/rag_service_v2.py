@@ -206,6 +206,15 @@ class RagServiceV2:
         self.session_id = session_id
         return self.store.ensure_session(session_id, "Chat")
 
+    def rename_session(self, session_id: str, title: str) -> None:
+        self.store.rename_session(session_id, title)
+
+    def delete_session(self, session_id: str) -> None:
+        self.delete_session_documents(session_id)
+        self.store.delete_session(session_id)
+        if self.session_id == session_id:
+            self.session_id = DEFAULT_SESSION_ID
+
     def delete_document(self, document_id: str) -> list[str]:
         self._idx_mgr.remove_document(document_id)
         return self.store.delete_document(document_id)

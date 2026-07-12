@@ -88,6 +88,7 @@ def _nodes_to_citations(
                 page_start=node.page_start,
                 page_end=node.page_end or node.page_start,
                 excerpt=node.text[:300],
+                heading_path=list(node.heading_path),
             ))
     return citations
 

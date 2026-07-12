@@ -13,13 +13,17 @@ class Citation:
     """A source reference attached to a claim in a generated answer.
 
     Attributes:
-        source_id:   Display label used in the answer text, e.g. "S1".
-        document_id: Parent document identifier.
-        filename:    Source filename.
-        page_start:  First page of the cited chunk / node.
-        page_end:    Last page of the cited chunk / node.
-        chunk_id:    Unique identifier of the cited chunk (legacy) or node.
-        excerpt:     Truncated text shown to the user.
+        source_id:    Display label used in the answer text, e.g. "S1".
+        document_id:  Parent document identifier.
+        filename:     Source filename.
+        page_start:   First page of the cited chunk / node.
+        page_end:     Last page of the cited chunk / node.
+        chunk_id:     Unique identifier of the cited chunk (legacy) or node.
+        excerpt:      Truncated text shown to the user.
+        heading_path: Ordered ancestor section titles from document root to
+                      the cited node. Empty when the source didn't carry
+                      structural information (e.g. reconstructed from an
+                      older stored row).
     """
 
     source_id: str
@@ -29,6 +33,7 @@ class Citation:
     page_end: int
     chunk_id: str
     excerpt: str
+    heading_path: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -48,3 +53,4 @@ class Answer:
     citations: list[Citation]
     answerable: bool
     debug: dict[str, object] = field(default_factory=dict)
+    strategy: str = "EXTRACTIVE"
