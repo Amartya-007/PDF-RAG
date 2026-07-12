@@ -92,33 +92,35 @@ class RetrievalService:
             session_node_ids=session_node_ids,
         )
 
-        # FAST FAIL: If no lexical hits, stop immediately. Do not load the whole DB.
-        if not lexical_hits:
-            logger.info("RetrievalService: No lexical hits found for query.")
-            return RetrievalResult(
-                nodes=[],
-                gate_decision=GateDecision(passed=False, score=0.0, reason="No initial matches found."),
-            )
+        tree_ids: set[str] = set()
+        if lexical_hits:
+            lexical_ids = {nid for nid, _ in lexical_hits}
+            lexical_nodes = self._repo.get_many(list(lexical_ids))
 
-        lexical_ids = {nid for nid, _ in lexical_hits}
+            # 2. Tree navigation: deterministic context expansion around lexical hits
+            tree_nodes = self._navigator.expand(lexical_nodes, self._repo, cancelled=cancelled)
+            tree_ids = {n.id for n in tree_nodes}
 
-        # Fetch lexical nodes from DB (Only ONE DB call needed for the merge process)
-        lexical_nodes = self._repo.get_many(list(lexical_ids))
-
-        # 2. Tree navigation: deterministic context expansion around lexical hits
-        # Passed `cancelled` down to allow the navigator to abort early if needed.
-        tree_nodes = self._navigator.expand(lexical_nodes, self._repo, cancelled=cancelled)
-        tree_ids = {n.id for n in tree_nodes}
-
-        # 3. Merge: tree nodes first, then lexical-only hits
-        # (Merged purely in-memory using the lexical_nodes we already fetched)
-        id_to_node: dict[str, DocumentNode] = {n.id: n for n in tree_nodes}
-        
-        for node in lexical_nodes:
-            if node.id not in id_to_node:
-                id_to_node[node.id] = node
-
-        candidates = list(id_to_node.values())
+            # 3. Merge: tree nodes first, then lexical-only hits
+            id_to_node: dict[str, DocumentNode] = {n.id: n for n in tree_nodes}
+            for node in lexical_nodes:
+                if node.id not in id_to_node:
+                    id_to_node[node.id] = node
+            candidates = list(id_to_node.values())
+        else:
+            # FAST FAIL guard: a bare word-overlap MATCH can legitimately miss
+            # a query whose keywords (e.g. "name") never appear verbatim in
+            # the target text (a resume header doesn't contain the word
+            # "name"). For small sessions, fall back to scanning every node
+            # directly rather than giving up -- bounded so this can never
+            # become a full-corpus scan on a large document collection.
+            candidates = self._full_scan_fallback(session_id, session_node_ids)
+            if not candidates:
+                logger.info("RetrievalService: No lexical hits found for query.")
+                return RetrievalResult(
+                    nodes=[],
+                    gate_decision=GateDecision(passed=False, score=0.0, reason="No initial matches found."),
+                )
 
         # 4. Rank merged candidates
         ranking = self._ranker.rank(
@@ -157,6 +159,29 @@ class RetrievalService:
         )
 
     # ── Private helpers ────────────────────────────────────────────────────
+
+    # Bound on the small-corpus full-scan fallback below -- large enough to
+    # cover a handful of ingested documents, small enough to stay well under
+    # the ranker's documented <5ms/≤200-candidate budget.
+    _FULL_SCAN_NODE_LIMIT = 200
+
+    def _full_scan_fallback(
+        self, session_id: str | None, session_node_ids: set[str] | None
+    ) -> list[DocumentNode]:
+        """Return every non-empty node in the session, if the session is small.
+
+        Used only when lexical search finds zero hits; returns [] (declining
+        to fall back) once the session is too large for a full scan to be
+        cheap and precise.
+        """
+        nodes = (
+            self._repo.get_many(list(session_node_ids))
+            if session_node_ids is not None
+            else self._repo.list_all_nodes()
+        )
+        if len(nodes) > self._FULL_SCAN_NODE_LIMIT:
+            return []
+        return [n for n in nodes if n.text and n.text.strip()]
 
     def _session_node_ids(self, session_id: str | None) -> set[str] | None:
         if session_id is None:

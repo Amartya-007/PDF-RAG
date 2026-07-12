@@ -19,6 +19,7 @@ import math
 import re
 from dataclasses import dataclass
 
+from backend.app.core.nlp import nlp
 from backend.app.domain.models.node import DocumentNode
 
 
@@ -32,6 +33,13 @@ def _jaccard(a: frozenset[str], b: frozenset[str]) -> float:
     inter = len(a & b)
     union = len(a | b)
     return inter / union if union else 0.0
+
+
+# A "what's the name" style query can miss on pure token overlap entirely --
+# a resume header containing "Amartya Vishwakarma" shares zero literal words
+# with a query asking for "name". Gates the (comparatively expensive) NER
+# check in _score_node so it only runs for queries that actually need it.
+_NAME_QUERY_RE = re.compile(r"\bname\b", re.I)
 
 
 @dataclass(slots=True)
@@ -58,6 +66,11 @@ class NodeRanker:
     _W_SOURCE   = 0.15
     _W_PAGE     = 0.10
     _W_DENSITY  = 0.05
+    # Extra (not part of the base 1.0 weight budget above): a name-seeking
+    # query gets a strong bonus for candidates that actually contain a
+    # detectable person name, since such queries often share zero literal
+    # words with a resume/profile header ("name" vs. "Amartya Vishwakarma").
+    _W_ENTITY   = 0.30
 
     def __init__(self, max_page: int = 500) -> None:
         self._max_page = max(max_page, 1)
@@ -88,9 +101,10 @@ class NodeRanker:
 
         query_tokens = _token_set(query)
         tree_ids = tree_selected_ids or set()
-        
+        wants_person_name = bool(_NAME_QUERY_RE.search(query))
+
         results = [
-            self._score_node(node, query, query_tokens, tree_ids)
+            self._score_node(node, query, query_tokens, tree_ids, wants_person_name)
             for node in candidates
         ]
         results.sort(key=lambda r: r.score, reverse=True)
@@ -206,6 +220,7 @@ class NodeRanker:
         query: str,
         query_tokens: frozenset[str],
         tree_ids: set[str],
+        wants_person_name: bool = False,
     ) -> RankingResult:
         node_text = node.text or ""
         node_tokens = _token_set(node_text)
@@ -215,6 +230,7 @@ class NodeRanker:
         source   = 1.0 if node.id in tree_ids else 0.0
         page     = self._page_score(node.page_start)
         density  = self._density_score(node_text)
+        entity   = self._person_entity_score(node_text) if wants_person_name else 0.0
 
         score = (
             self._W_OVERLAP * overlap
@@ -222,6 +238,7 @@ class NodeRanker:
             + self._W_SOURCE  * source
             + self._W_PAGE    * page
             + self._W_DENSITY * density
+            + self._W_ENTITY  * entity
         )
 
         return RankingResult(
@@ -273,3 +290,30 @@ class NodeRanker:
         if words < 30:
             return 0.5
         return 1.0
+
+    @staticmethod
+    def _person_entity_score(text: str) -> float:
+        """Cheap PERSON-entity presence check via the shared spaCy pipeline.
+
+        Only invoked for name-seeking queries (gated by the caller) so NER
+        doesn't run on every candidate for every query -- just the ones
+        where token overlap alone is known to be an unreliable signal.
+
+        Requires genuine title-case tokens (e.g. "Amartya Vishwakarma").
+        spaCy's small model also mis-tags ALL-CAPS section headers (e.g.
+        "EDUCATION COURSEWORK SKILLS...") as PERSON; without this check
+        such false positives would tie the score against a real name.
+        """
+        if not text or len(text) > 500:
+            # A name usually lives in a short header/label; skip long
+            # paragraphs both for cost and because NER precision drops on
+            # dense body text anyway.
+            return 0.0
+        doc = nlp(text)
+        for ent in doc.ents:
+            if ent.label_ != "PERSON":
+                continue
+            tokens = [t for t in ent.text.split() if t.isalpha()]
+            if len(tokens) >= 2 and all(t[:1].isupper() and t[1:].islower() for t in tokens):
+                return 1.0
+        return 0.0

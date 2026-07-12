@@ -183,6 +183,14 @@ class RagServiceV2:
 
         return chunks, debug
 
+    def import_okf_bundle(self, source_root: str | Path) -> list[OkfConcept]:
+        """Imports an externally-authored OKF concept bundle.
+
+        Attributes:
+            source_root: Directory containing the OKF markdown files to import.
+        """
+        return self.okf_importer.import_bundle(Path(source_root))
+
     def list_documents(self, session_id: str | None = None) -> list[Document]:
         return self.store.list_documents(session_id or self.session_id)
 
