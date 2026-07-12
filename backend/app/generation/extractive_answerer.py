@@ -8,16 +8,13 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, replace
 
-import spacy
 import phonenumbers
 from thefuzz import fuzz
 
+from backend.app.core.nlp import nlp
 from backend.app.core.text import truncate_words
 from backend.app.domain.models.node import DocumentNode
 from backend.app.models import Answer, Citation
-
-# Load the spaCy English model globally so it only initializes once
-nlp = spacy.load("en_core_web_sm")
 
 _FAST_FACT_PATTERNS = [
     re.compile(r"\bwhat['s|s| ]+(is|are|was|were)\b", re.I),
@@ -129,31 +126,39 @@ class ExtractiveAnswerer:
 
     def _extractive_fact_answer(self, question: str, nodes: list[DocumentNode], citations: list[Citation]) -> str | None:
         normalized = question.lower()
-        words_set = set(normalized.split())
+        words_set = set(re.findall(r"[a-z']+", normalized))
 
-        # Check for Names using spaCy NER
-        if "name" in words_set or any(term in words_set for term in ["resume", "cv", "person", "candidate"]):
-            return self._answer_name(nodes, citations)
+        # Check for Institutions using spaCy NER (checked before the generic
+        # "name" catch-all below, since a "college name?" question contains
+        # the word "name" but is really an institution query)
+        if words_set & {"college", "collage", "university", "institute", "school"}:
+            if answer := self._answer_institution(nodes, citations):
+                return answer
 
         # Check for Grades
         if "cgpa" in words_set or "gpa" in words_set:
-            return self._answer_pattern(nodes, citations, _CGPA_RE, "The CGPA is {value}.")
+            if answer := self._answer_pattern(nodes, citations, _CGPA_RE, "The CGPA is {value}."):
+                return answer
 
-        # Check for Institutions using spaCy NER
-        if words_set & {"college", "collage", "university", "institute", "school"}:
-            return self._answer_institution(nodes, citations)
+        # Check for Names using spaCy NER
+        if "name" in words_set or any(term in words_set for term in ["resume", "cv", "person", "candidate"]):
+            if answer := self._answer_name(nodes, citations):
+                return answer
 
         # Check for Degrees
         if words_set & {"degree", "course", "branch", "program"}:
-            return self._answer_degree(nodes, citations)
+            if answer := self._answer_degree(nodes, citations):
+                return answer
 
         # Check for Contacts
         if "email" in words_set or "mail" in words_set:
-            return self._answer_pattern(nodes, citations, _EMAIL_RE, "The email address is {value}.")
-            
+            if answer := self._answer_pattern(nodes, citations, _EMAIL_RE, "The email address is {value}."):
+                return answer
+
         # Use phonenumbers package instead of custom Regex
         if words_set & {"phone", "mobile", "contact", "number"}:
-            return self._answer_phone(nodes, citations)
+            if answer := self._answer_phone(nodes, citations):
+                return answer
 
         return None
 
@@ -165,8 +170,20 @@ class ExtractiveAnswerer:
                 if ent.label_ == "PERSON":
                     # Clean up common NER trailing characters
                     clean_name = ent.text.strip(" .\n:")
-                    if len(clean_name.split()) >= 2: # Prefer full names
-                        return f"The name is {clean_name}. [{citation.source_id}]"
+                    # spaCy's small model sometimes over-extends a PERSON span
+                    # to include the next resume field (e.g. a trailing place
+                    # name or "BTECH(CSE"); keep only a leading run of pure
+                    # alphabetic tokens, capped at 2 ("First Last").
+                    name_tokens: list[str] = []
+                    for token in clean_name.split():
+                        if not token.isalpha():
+                            break
+                        name_tokens.append(token)
+                        if len(name_tokens) == 2:
+                            break
+                    if len(name_tokens) >= 2:  # Prefer full names
+                        clean_name = " ".join(name_tokens)
+                        return f"The full name is {clean_name}. [{citation.source_id}]"
         return None
 
     def _answer_institution(self, nodes: list[DocumentNode], citations: list[Citation]) -> str | None:
@@ -201,22 +218,35 @@ class ExtractiveAnswerer:
         # Strip query words to find the core topic phrase
         core_topic = re.sub(r"\b(what|is|are|the|a|an|define|explain|describe|tell|me|everything|all|about|of|in|detail|details|please|also)\b", "", normalized).strip()
 
-        best: tuple[float, str, Citation] | None = None
-        for citation, node in zip(citations, nodes):
-            doc = nlp(node.text)
-            sentences = [sent.text.strip() for sent in doc.sents]
-            
-            for sentence in sentences:
-                # TheFuzz replaces custom token overlap scoring
-                score = fuzz.token_set_ratio(core_topic, sentence)
-                if score > 50 and (best is None or score > best[0]):
-                    best = (score, sentence, citation)
+        if detailed:
+            # "Tell me everything about X" wants the whole relevant passage,
+            # not one isolated sentence -- score whole nodes (title + text)
+            # against the topic and return the best node's full text.
+            best_node: tuple[float, DocumentNode, Citation] | None = None
+            for citation, node in zip(citations, nodes):
+                haystack = f"{node.title or ''} {node.text}"
+                score = fuzz.token_set_ratio(core_topic, haystack)
+                if score > 50 and (best_node is None or score > best_node[0]):
+                    best_node = (score, node, citation)
 
-        if best is not None:
-            _, sentence, citation = best
-            limit = 170 if detailed else 70
-            sentence = truncate_words(sentence, limit).strip(" -")
-            return f"{sentence} [{citation.source_id}]"
+            if best_node is not None:
+                _, node, citation = best_node
+                passage = truncate_words(node.text, 170).strip(" -")
+                return f"{passage} [{citation.source_id}]"
+        else:
+            best: tuple[float, str, Citation] | None = None
+            for citation, node in zip(citations, nodes):
+                doc = nlp(node.text)
+                for sentence in (sent.text.strip() for sent in doc.sents):
+                    # TheFuzz replaces custom token overlap scoring
+                    score = fuzz.token_set_ratio(core_topic, sentence)
+                    if score > 50 and (best is None or score > best[0]):
+                        best = (score, sentence, citation)
+
+            if best is not None:
+                _, sentence, citation = best
+                sentence = truncate_words(sentence, 70).strip(" -")
+                return f"{sentence} [{citation.source_id}]"
 
         if nodes and citations:
             excerpt = truncate_words(nodes[0].text, 60).strip(" -")

@@ -12,6 +12,8 @@ from nltk.tokenize import sent_tokenize
 from backend.app.core.config import Settings
 from backend.app.core.text import truncate_words
 from backend.app.domain.exceptions import GenerationError
+from backend.app.domain.models.node import DocumentNode
+from backend.app.generation.extractive_answerer import ExtractiveAnswerer
 from backend.app.generation.ollama_client import OllamaClient
 from backend.app.generation.prompts import build_answer_prompt
 from backend.app.models import Answer, Citation, Chunk
@@ -41,6 +43,7 @@ class Answerer:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self.ollama = OllamaClient(settings)
+        self._extractive = ExtractiveAnswerer()
 
     def answer(
         self, question: str, chunks: list[Chunk], debug: dict[str, Any] | None = None
@@ -63,7 +66,20 @@ class Answerer:
         evidence, citations = build_evidence_block(chunks)
         debug_info = debug or {}
 
-        # 1. Fast-path generic extraction (Keyword overlap)
+        # 1. Rich extractive matching (names, CGPA, institutions, degrees,
+        #    phone numbers, and detailed topic passages) via ExtractiveAnswerer.
+        pseudo_nodes = [self._chunk_to_pseudo_node(chunk) for chunk in chunks]
+        extractive = self._extractive.answer(question, pseudo_nodes)
+        if extractive.answerable:
+            return Answer(
+                question=question,
+                answer=extractive.answer,
+                citations=citations,
+                answerable=True,
+                debug=debug_info,
+            )
+
+        # 2. Fast-path generic extraction (Keyword overlap)
         if extractive_answer := self._generic_extractive_answer(question, chunks, citations):
             return Answer(
                 question=question,
@@ -73,7 +89,7 @@ class Answerer:
                 debug=debug_info,
             )
 
-        # 2. Ollama generation — for synthesis, reasoning, or complex queries
+        # 3. Ollama generation — for synthesis, reasoning, or complex queries
         if self.settings.use_ollama:
             try:
                 generated = self.ollama.generate(build_answer_prompt(question, evidence))
@@ -88,7 +104,7 @@ class Answerer:
             except GenerationError:
                 pass  # Fallback to extractive on generation failure
 
-        # 3. Final fallback — always return the best extracted sentence from top chunk
+        # 4. Final fallback — always return the best extracted sentence from top chunk
         fallback = self._fallback_answer(chunks, citations)
         return Answer(
             question=question,
@@ -96,6 +112,25 @@ class Answerer:
             citations=citations,
             answerable=True,
             debug=debug_info,
+        )
+
+    @staticmethod
+    def _chunk_to_pseudo_node(chunk: Chunk) -> DocumentNode:
+        """Wrap a Chunk as a minimal DocumentNode so ExtractiveAnswerer (which
+        operates on the newer node-based domain model) can be reused here
+        without duplicating its extraction logic."""
+        return DocumentNode(
+            id=chunk.chunk_id,
+            document_id=chunk.document_id,
+            parent_id=None,
+            node_type="paragraph",
+            title=None,
+            text=chunk.text,
+            page_start=chunk.page_start,
+            page_end=chunk.page_end,
+            depth=0,
+            position=0,
+            heading_path=list(chunk.section_path),
         )
 
     def _generic_extractive_answer(
