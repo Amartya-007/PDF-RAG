@@ -1,52 +1,75 @@
-# Local PDF RAG — pinned runtime dependencies
-# Generated from: uv pip freeze  (venv: .venv, Python 3.12)
+# PDF-RAG — pinned runtime dependencies
+# Verified by a clean venv install + full backend test suite pass
+# (89/89, see docs/baseline_2026-07-11.md) on Python 3.12.
 #
 # Install with:
 #   uv pip install -r requirements.txt
 # or:
 #   pip install -r requirements.txt
+#
+# NOTE: en_core_web_sm (the spaCy English model used for name/institution
+# extraction) is not installable via pip alone. After installing this file,
+# also run:
+#   python -m spacy download en_core_web_sm
 
-# ── Core HTTP + async ──────────────────────────────────────────────────
+# ── Web API (FastAPI) ──────────────────────────────────────────────────
+fastapi==0.139.0
+uvicorn[standard]==0.51.0
+python-multipart==0.0.32
+starlette==1.3.1
 anyio==4.14.1
-certifi==2026.6.17
-h11==0.16.0
-httpcore==1.0.9
 httpx==0.28.1
+httpcore==1.0.9
+h11==0.16.0
+certifi==2026.6.17
 idna==3.18
+httptools==0.8.0
+watchfiles==1.2.0
+websockets==16.1
 
-# ── Ollama SDK ─────────────────────────────────────────────────────────
+# ── Ollama SDK (optional local LLM synthesis) ──────────────────────────
 ollama==0.6.2
 
-# ── BM25 sparse retrieval ──────────────────────────────────────────────
+# ── PDF parsing ──────────────────────────────────────────────────────────
+pymupdf==1.28.0
+
+# ── Sparse / lexical retrieval ───────────────────────────────────────────
 bm25s==0.3.9
 
-# ── Numerical computing ────────────────────────────────────────────────
+# ── NLP: heading/entity/fuzzy-text extraction ────────────────────────────
+spacy==3.8.14
+thefuzz==0.22.1
+RapidFuzz==3.14.5
+nltk==3.10.0
+phonenumbers==9.0.34
+
+# ── Numerical computing ───────────────────────────────────────────────────
 numpy==2.5.0
 pandas==3.0.3
 python-dateutil==2.9.0.post0
 six==1.17.0
 tzdata==2026.2
 
-# ── PDF parsing ────────────────────────────────────────────────────────
-pymupdf==1.28.0
-
-# ── Data validation ────────────────────────────────────────────────────
+# ── Data validation / settings ────────────────────────────────────────────
 pydantic==2.13.4
-pydantic-core==2.46.4
+pydantic-settings==2.14.2
+pydantic_core==2.46.4
 annotated-types==0.7.0
-typing-extensions==4.16.0
 typing-inspection==0.4.2
+typing_extensions==4.16.0
+python-dotenv==1.2.2
 
-# ── Packaging / build ─────────────────────────────────────────────────
+# ── Packaging / build ──────────────────────────────────────────────────────
 setuptools==82.0.1
 packaging==26.2
 colorama==0.4.6
 
-# ── Testing ────────────────────────────────────────────────────────────
+# ── Testing ─────────────────────────────────────────────────────────────────
 pytest==9.1.1
+hypothesis==6.156.6
 iniconfig==2.3.0
 pluggy==1.6.0
 pygments==2.20.0
 
-# ── Linting ────────────────────────────────────────────────────────────
+# ── Linting ───────────────────────────────────────────────────────────────
 ruff==0.15.20

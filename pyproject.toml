@@ -13,10 +13,16 @@ dependencies = []
 backend = [
   "fastapi>=0.115",
   "uvicorn[standard]>=0.30",
+  "python-multipart>=0.0.9",
   "pydantic>=2.8",
-  "sqlalchemy>=2.0",
+  "pydantic-settings>=2.4",
   "pymupdf>=1.24",
   "ollama>=0.3",
+  "bm25s>=0.2",
+  "spacy>=3.7",
+  "thefuzz>=0.20",
+  "nltk>=3.9",
+  "phonenumbers>=8.13",
 ]
 pdf = [
   "docling>=2.0",
