@@ -18,6 +18,103 @@ record of the bug-fixing pass that got it there.
 | pip or uv | Any recent version |
 | Ollama | Optional, for generated (non-extractive) answers |
 
+## Prerequisites
+
+Before setting up the project, ensure the required software is installed.
+
+### 1. Python (Required)
+
+This project requires **Python 3.12 or 3.13**.
+
+Check your installed version:
+
+```powershell
+python --version
+```
+
+or
+
+```powershell
+py --version
+```
+
+If Python is not installed, or if your version is older than 3.12, download
+and install the latest supported version from:
+
+https://www.python.org/downloads/
+
+> **Important:** During installation, enable **"Add Python to PATH"**.
+
+### 2. pip
+
+`pip` is Python's package manager and is included with modern Python
+installations.
+
+Verify it is available:
+
+```powershell
+pip --version
+```
+
+If the command works, nothing else is required.
+
+### 3. uv (Recommended)
+
+This README uses **uv** because it is significantly faster than pip for
+creating virtual environments and installing packages.
+
+Check whether it is installed:
+
+```powershell
+uv --version
+```
+
+If it is not installed, install it with:
+
+```powershell
+pip install uv
+```
+
+You can also use standard `pip` instead of `uv`; all commands in this README
+have equivalent `pip` versions.
+
+### 4. Git (Optional)
+
+Git is only required if you are cloning the repository.
+
+Check whether Git is installed:
+
+```powershell
+git --version
+```
+
+If Git is not installed, download it from:
+
+https://git-scm.com/downloads
+
+### 5. Ollama (Optional)
+
+Ollama is only required if you want AI-generated answers.
+
+Extractive question answering works without it.
+
+Download Ollama from:
+
+https://ollama.com/
+
+### Verify Your Installation
+
+Before continuing, the following commands should all work:
+
+```powershell
+python --version
+pip --version
+uv --version
+```
+
+If you do not have `uv`, simply replace every `uv` command in this README
+with its equivalent `pip` command.
+
 ## Setup
 
 ```powershell
